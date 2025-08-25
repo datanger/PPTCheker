@@ -1,0 +1,18 @@
+jp_font_name: "Meiyou UI"
+min_font_size_pt: 12
+
+acronym_min_len: 2
+acronym_max_len: 8
+
+color_count_threshold: 5
+
+output_format: "md"
+
+autofix_font: false
+autofix_size: false
+autofix_color: false
+
+# 可选词库路径示例
+# jp_terms_path: "dicts/jp_it_terms.txt"
+# term_mapping_path: "dicts/term_mapping.csv"
+
