@@ -1,15 +1,12 @@
 """
-基于元数据的字符属性差分串序列化器
+基于元数据的字符属性串序列化器（差分变更模式）
 
-对应计划部分：
-- 将“元数据”进行整合，按字符属性变更输出单字符串表达，减少tokens
-- 仅在属性变化处输出【字符属性变更：...】标记
-- 识别换行与段首缩进，输出【换行】【缩进{N}】
-- 颜色标准化为十六进制；初始属性中的未知项尽量用后续字符的可获取值补齐
-
-使用方法：
-- 从 parsing_result_new.json 加载元数据
-- 调用 serialize_metadata_to_diff_strings，得到每页每文本块的差分字符串
+规则：
+- 初始输出一次全量7项属性，标记为【初始的字符所有属性：...】
+- 后续仅当属性发生变化时输出“变更项”，标记为【字符属性变更：...】
+- 变更标记中只包含发生变化的键，不重复未变更项
+- 仍支持【换行】【缩进{N}】控制标记
+- 颜色标准化为十六进制；初始属性采用整块最常见非空属性并补齐
 """
 
 from typing import List, Dict, Any, Tuple, Optional
@@ -18,7 +15,6 @@ import os
 import re
 from collections import Counter
 
-# 需要聚合的字符属性键（与元数据一致）
 ATTR_KEYS = [
     "字体类型",
     "字号",
@@ -29,7 +25,6 @@ ATTR_KEYS = [
     "是否带删除线",
 ]
 
-# 常见中文颜色名映射
 NAMED_COLOR_TO_HEX = {
     "黑": "#000000", "黑色": "#000000",
     "白": "#FFFFFF", "白色": "#FFFFFF",
@@ -44,39 +39,32 @@ NAMED_COLOR_TO_HEX = {
 
 
 def _format_bool(value: Any) -> str:
-    """将布尔/数值转中文“是/否/未知”。"""
     if value is True or value == 1:
         return "是"
     if value is False or value == 0:
         return "否"
-    return "未知"
+    return "否"  # 三态缺省按否处理
 
 
 def _to_hex_color(value: Any) -> Optional[str]:
-    """将颜色值标准化为 #RRGGBB。支持：hex、rgb()/rgba() 字符串、中文名、(r,g,b)/[r,g,b]。"""
     if value is None:
         return None
-    # 直接是hex
     if isinstance(value, str) and re.fullmatch(r"#?[0-9a-fA-F]{6}", value):
         v = value if value.startswith('#') else f"#{value}"
         return v.upper()
-    # rgb()/rgba()
     if isinstance(value, str) and value.lower().startswith("rgb"):
         nums = re.findall(r"\d+", value)
         if len(nums) >= 3:
             r, g, b = (int(nums[0]), int(nums[1]), int(nums[2]))
             return f"#{r:02X}{g:02X}{b:02X}"
-    # 中文名
     if isinstance(value, str) and value in NAMED_COLOR_TO_HEX:
         return NAMED_COLOR_TO_HEX[value]
-    # 三元组/列表
     if isinstance(value, (tuple, list)) and len(value) >= 3:
         try:
             r, g, b = int(value[0]), int(value[1]), int(value[2])
             return f"#{r:02X}{g:02X}{b:02X}"
         except Exception:
             pass
-    # 其它字符串尝试从中文名中提取
     if isinstance(value, str):
         for name, hexv in NAMED_COLOR_TO_HEX.items():
             if name in value:
@@ -85,31 +73,36 @@ def _to_hex_color(value: Any) -> Optional[str]:
 
 
 def _normalize_value(key: str, value: Any) -> Any:
-    """规范化属性值，保证输出稳定。"""
-    if value is None:
-        return "未知"
     if key in ("是否粗体", "是否斜体", "是否下划线", "是否带删除线"):
         return _format_bool(value)
     if key == "字体颜色":
         hexv = _to_hex_color(value)
-        return hexv if hexv is not None else "未知"
-    # 字号/字体类型按原样输出
+        return hexv if hexv is not None else "#000000"
+    if key == "字体类型":
+        # 将字体类型归一为有限集合：微软雅黑、宋体、Meiryo UI、楷体、timenew roman；其余为“其他”
+        if not isinstance(value, str) or not value.strip():
+            return "其他"
+        raw = value.strip().lower().replace(" ", "")
+        # 常见别名/英文字体族名归一
+        if raw in {"微软雅黑", "microsoftyahei", "msyahei", "yahei"}:
+            return "微软雅黑"
+        if raw in {"宋体", "simsun"}:
+            return "宋体"
+        if raw in {"楷体", "kaiti", "kaitisc", "stkaiti"}:
+            return "楷体"
+        # Meiryo UI 系列别名：含 meiryo/meiyou/拼写变体，统一归为 Meiryo UI
+        if raw in {"meiryoui", "meiryoui", "meiryo", "meiyou"} or value.strip() in {"Meiryo UI", "Meiryo"}:
+            return "Meiryo UI"
+        if raw in {"timesnewroman", "timenewroman", "timesnewromanpsmt"} or value.strip() in {"Times New Roman", "TimeNew Roman", "timenew roman"}:
+            return "timenew roman"
+        # 若为主题占位符（+mn-ea/+mj-lt 等），归为“其他”（保持不猜测）
+        if raw.startswith('+'):
+            return "其他"
+        return "其他"
     return value
 
 
-def _diff_attrs(prev: Dict[str, Any], curr: Dict[str, Any]) -> Dict[str, Any]:
-    """计算属性差异，仅输出发生变化的键。缺失视为沿用上一次。"""
-    diff: Dict[str, Any] = {}
-    for k in ATTR_KEYS:
-        prev_v = prev.get(k, None)
-        curr_v = curr.get(k, prev_v)
-        if curr_v != prev_v:
-            diff[k] = _normalize_value(k, curr_v)
-    return diff
-
-
 def _attrs_from_char(char_info: Dict[str, Any], prev: Dict[str, Any]) -> Dict[str, Any]:
-    """从字符元数据提取属性快照，缺失字段继承 prev。"""
     snapshot: Dict[str, Any] = {}
     for k in ATTR_KEYS:
         if k in char_info:
@@ -117,22 +110,12 @@ def _attrs_from_char(char_info: Dict[str, Any], prev: Dict[str, Any]) -> Dict[st
         else:
             if k in prev:
                 snapshot[k] = prev[k]
+            else:
+                snapshot[k] = None
     return snapshot
 
 
-def _make_change_marker(changes: Dict[str, Any]) -> str:
-    """生成变更标记字符串，例如：【字符属性变更：字号{9}、是否下划线{是}】"""
-    if not changes:
-        return ""
-    parts = []
-    for k in ATTR_KEYS:
-        if k in changes:
-            parts.append(f"{k}{{{_normalize_value(k, changes[k])}}}")
-    return "【字符属性变更：" + "、".join(parts) + "】"
-
-
-def _make_initial_marker(attrs: Dict[str, Any], label: str = "初始的字符属性说明") -> str:
-    """生成初始属性说明，包含全部七个属性。标签可配置。"""
+def _make_initial_marker(attrs: Dict[str, Any], label: str) -> str:
     parts = []
     for k in ATTR_KEYS:
         v = _normalize_value(k, attrs.get(k))
@@ -140,8 +123,29 @@ def _make_initial_marker(attrs: Dict[str, Any], label: str = "初始的字符属
     return f"【{label}：" + "、".join(parts) + "】"
 
 
-def _most_frequent_non_unknown(values: List[Any], key: str) -> Optional[Any]:
-    """返回列表中出现频率最高的非未知值（按规范化前的原值判断，再在返回前做规范化）。"""
+def _make_full_attrs_marker(attrs: Dict[str, Any]) -> str:
+    parts = []
+    for k in ATTR_KEYS:
+        v = _normalize_value(k, attrs.get(k))
+        parts.append(f"{k}{{{v}}}")
+    return "【字符属性：" + "、".join(parts) + "】"
+
+
+def _make_changed_attrs_marker(prev_attrs: Dict[str, Any], curr_attrs: Dict[str, Any]) -> Optional[str]:
+    """仅格式化变更的属性键值；无变更则返回 None。"""
+    changed_parts = []
+    for k in ATTR_KEYS:
+        pv = prev_attrs.get(k)
+        cv = curr_attrs.get(k)
+        if pv != cv:
+            v = _normalize_value(k, cv)
+            changed_parts.append(f"{k}{{{v}}}")
+    if not changed_parts:
+        return None
+    return "【字符属性变更：" + "、".join(changed_parts) + "】"
+
+
+def _most_frequent_non_unknown(values: List[Any]) -> Optional[Any]:
     filtered = [v for v in values if v is not None]
     if not filtered:
         return None
@@ -151,68 +155,34 @@ def _most_frequent_non_unknown(values: List[Any], key: str) -> Optional[Any]:
 
 
 def _build_initial_attrs(chars: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """以文本块内最常见非空属性作为初始值；若无则回退到首字符+向后补齐；颜色统一为hex。"""
+    """以首个可见字符作为初始属性基线。"""
     if not chars:
-        return {k: "未知" for k in ATTR_KEYS}
-
-    # 统计整块属性分布
-    dist: Dict[str, List[Any]] = {k: [] for k in ATTR_KEYS}
-    for ch in chars:
-        if ch.get("字符内容") == "\n":
-            continue
-        for k in ATTR_KEYS:
-            dist[k].append(ch.get(k))
-
-    base: Dict[str, Any] = {}
-    for k in ATTR_KEYS:
-        best = _most_frequent_non_unknown(dist[k], k)
-        base[k] = best
-
-    # 若仍有缺失，使用原回退策略：首字符值并向后补齐
-    if any(v is None for v in base.values()):
-        first = next((c for c in chars if c.get("字符内容") != "\n"), None)
-        if first is not None:
-            for k in ATTR_KEYS:
-                if base[k] is None:
-                    base[k] = first.get(k, None)
-        for k in ATTR_KEYS:
-            if base[k] is None:
-                for ch in chars:
-                    if ch.get("字符内容") == "\n":
-                        continue
-                    if k in ch and ch[k] is not None:
-                        base[k] = ch[k]
-                        break
-
-    # 规范化
-    for k in ATTR_KEYS:
-        base[k] = _normalize_value(k, base[k])
-    return base
+        return {k: None for k in ATTR_KEYS}
+    first = next((c for c in chars if c.get("字符内容") != "\n"), None)
+    if first is None:
+        return {k: None for k in ATTR_KEYS}
+    return {k: first.get(k) for k in ATTR_KEYS}
 
 
-def serialize_text_block_to_diff_string(text_block: Dict[str, Any], initial_label: str = "初始的字符属性说明") -> str:
-    """将单个文本块的字符数组序列化为差分字符串。
-    - 以【初始的字符属性说明：...】作为起始标记（包含全部七个属性，未知项尽量补齐）
-    - 后续只在属性变化处插入【字符属性变更：...】
-    - 遇到换行符（\n）输出【换行】并统计后续连续空格数量输出【缩进{N}】
-    - 文本连续段合并输出，避免逐字符冗余
-    initial_label: 初始属性标签文本（例如“初始的字符所有属性”）
-    """
-    text_info = next(iter(text_block.values()))  # 取到 {"文本块X": {...}} 的内部字典
+def serialize_text_block_to_diff_string(text_block: Dict[str, Any], initial_label: str = "初始的字符所有属性") -> str:
+    text_info = next(iter(text_block.values()))
     chars: List[Dict[str, Any]] = text_info.get("字符属性", [])
     if not chars:
-        base_unknown = {k: "未知" for k in ATTR_KEYS}
-        return _make_initial_marker(base_unknown, initial_label)
+        return _make_initial_marker({k: None for k in ATTR_KEYS}, initial_label)
 
     output_parts: List[str] = []
-    initial_attrs = _build_initial_attrs(chars)
+    # 计算初始属性，并标准化用于后续比较
+    initial_attrs_raw = _build_initial_attrs(chars)
+    initial_attrs = {k: _normalize_value(k, initial_attrs_raw.get(k)) for k in ATTR_KEYS}
     prev_attrs: Dict[str, Any] = {}
+    at_baseline: bool = True  # 是否处于“与初始属性一致”的状态
     buf: List[str] = []
 
     i = 0
     while i < len(chars):
         ch = chars[i]
         char_text = ch.get("字符内容", "")
+
         if char_text == "\n":
             if buf:
                 output_parts.append("".join(buf))
@@ -234,17 +204,31 @@ def serialize_text_block_to_diff_string(text_block: Dict[str, Any], initial_labe
         if prev_attrs == {}:
             output_parts.append(_make_initial_marker(initial_attrs, initial_label))
             prev_attrs = curr_attrs
-            buf.append(char_text)
-        else:
-            changes = _diff_attrs(prev_attrs, curr_attrs)
-            if changes:
+            # 基于与初始属性的比较，更新基线状态
+            at_baseline = all(curr_attrs.get(k) == initial_attrs.get(k) for k in ATTR_KEYS)
+            # 若一开始就偏离初始属性，则输出一次相对初始的变更说明
+            if not at_baseline:
                 if buf:
                     output_parts.append("".join(buf))
                     buf = []
-                output_parts.append(_make_change_marker(changes))
-                prev_attrs = curr_attrs
+                marker = _make_changed_attrs_marker(initial_attrs, curr_attrs)
+                if marker:
+                    output_parts.append(marker)
             buf.append(char_text)
-
+        else:
+            # 仅当“相对初始属性发生偏离，且此前处于基线状态”时输出变更说明
+            is_baseline_now = all(curr_attrs.get(k) == initial_attrs.get(k) for k in ATTR_KEYS)
+            if at_baseline and (not is_baseline_now):
+                if buf:
+                    output_parts.append("".join(buf))
+                    buf = []
+                marker = _make_changed_attrs_marker(initial_attrs, curr_attrs)
+                if marker:
+                    output_parts.append(marker)
+            # 更新基线状态与上一属性快照
+            at_baseline = is_baseline_now
+            prev_attrs = curr_attrs
+            buf.append(char_text)
         i += 1
 
     if buf:
@@ -253,7 +237,7 @@ def serialize_text_block_to_diff_string(text_block: Dict[str, Any], initial_labe
     return "".join(output_parts)
 
 
-def serialize_metadata_to_diff_strings(metadata: List[List[Dict[str, Any]]], initial_label: str = "初始的字符属性说明") -> List[List[str]]:
+def serialize_metadata_to_diff_strings(metadata: List[List[Dict[str, Any]]], initial_label: str = "初始的字符所有属性") -> List[List[str]]:
     slides_strings: List[List[str]] = []
     for slide in metadata:
         slide_strings: List[str] = []
