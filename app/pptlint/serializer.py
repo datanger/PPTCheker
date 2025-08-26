@@ -9,7 +9,7 @@
 - 颜色标准化为十六进制；初始属性采用整块最常见非空属性并补齐
 """
 
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Optional
 import json
 import os
 import re
@@ -83,16 +83,15 @@ def _normalize_value(key: str, value: Any) -> Any:
         if not isinstance(value, str) or not value.strip():
             return "其他"
         raw = value.strip().lower().replace(" ", "")
+        if "宋体" in raw or "simsun" in raw:
+            return "宋体"
+        if "meiryo" in raw:
+            return "Meiryo UI"
         # 常见别名/英文字体族名归一
         if raw in {"微软雅黑", "microsoftyahei", "msyahei", "yahei"}:
             return "微软雅黑"
-        if raw in {"宋体", "simsun"}:
-            return "宋体"
         if raw in {"楷体", "kaiti", "kaitisc", "stkaiti"}:
             return "楷体"
-        # Meiryo UI 系列别名：含 meiryo/meiyou/拼写变体，统一归为 Meiryo UI
-        if raw in {"meiryoui", "meiryoui", "meiryo", "meiyou"} or value.strip() in {"Meiryo UI", "Meiryo"}:
-            return "Meiryo UI"
         if raw in {"timesnewroman", "timenewroman", "timesnewromanpsmt"} or value.strip() in {"Times New Roman", "TimeNew Roman", "timenew roman"}:
             return "timenew roman"
         # 若为主题占位符（+mn-ea/+mj-lt 等），归为“其他”（保持不猜测）

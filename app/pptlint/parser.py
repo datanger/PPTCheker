@@ -2,8 +2,8 @@
 PPTX 解析器 - 提取PPT文件的详细信息
 
 输出格式：
-- 每页为一个对象映射：{"文本块N": {...}, "图片M": {...}}
-- 文本块：文本块位置、图层编号、是否是标题占位符、字符属性数组、拼接字符
+- 每页为一个对象：{"页码": int, "文本块": [...], "图片": [...]}
+- 文本块：文本块位置、图层编号、是否是标题占位符、拼接字符
 - 图片：图片位置、类型、大小、图层位置
 
 注意：某些字段可能无法直接获取，已删除并说明原因
@@ -14,12 +14,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from pptx import Presentation
 from pptx.dml.color import RGBColor, MSO_THEME_COLOR
 from pptx.enum.shapes import PP_PLACEHOLDER, MSO_SHAPE_TYPE
-
-# 兼容脚本直跑与包内相对导入
-try:
-    from .serializer import serialize_text_block_to_diff_string
-except Exception:
-    from app.pptlint.serializer import serialize_text_block_to_diff_string
+from serializer import serialize_text_block_to_diff_string
 
 # 删除的字段及原因：
 # - 图片质量：无法直接获取，需要图像分析
@@ -40,34 +35,8 @@ THEME_COLOR_TO_HEX = {
     MSO_THEME_COLOR.HYPERLINK: "#0563C1",
     MSO_THEME_COLOR.FOLLOWED_HYPERLINK: "#954F72",
 }
-# 已移除：DEBUG 输出、演示级 defaultTextStyle 缓存与加载、外部文件修补函数
 
 
-def patch_theme_eastasia_fonts(*args, **kwargs) -> bool:
-    """已删除冗余外部修补逻辑，占位返回False。"""
-    return False
-
-
-def patch_presentation_defaulttextstyle_ea(*args, **kwargs) -> bool:
-    """已删除冗余外部修补逻辑，占位返回False。"""
-    return False
-
-
-def patch_all_lststyle_eastasia(*args, **kwargs) -> bool:
-    """已删除冗余外部修补逻辑，占位返回False。"""
-    return False
-
-
-def patch_master_title_eastasia(*args, **kwargs) -> bool:
-    """已删除冗余外部修补逻辑，占位返回False。"""
-    return False
-
-
-
-# 主题占位符字体名默认映射（当主题未给出 eastAsia/latin 实际字体时的兜底）
-# 说明：
-# - "+mn-ea"/"+mj-ea" 视为东亚字体，默认映射到“微软雅黑”
-# - "+mn-lt"/"+mj-lt" 视为拉丁字体，默认映射到“Calibri”
 THEME_PLACEHOLDER_DEFAULT_MAP = {
     "+mn-ea": "微软雅黑",
     "+mj-ea": "微软雅黑",
@@ -77,19 +46,25 @@ THEME_PLACEHOLDER_DEFAULT_MAP = {
 
 
 def _map_theme_placeholder_to_font(name: str, theme_fonts: Dict[str, Optional[str]]) -> Optional[str]:
-    # 仅当主题明确提供对应映射时返回，否则None（不做兜底猜测）
+    # 先尝试使用主题提供的具体字体；若无，则回退到内置占位符默认映射
     if not isinstance(name, str) or not name.startswith('+'):
         return None
     low = name.lower()
+    # 主题字体优先
     if 'mj' in low and 'ea' in low:
-        return theme_fonts.get('major_eastAsia')
+        mapped = theme_fonts.get('major_eastAsia')
+        return mapped if mapped else THEME_PLACEHOLDER_DEFAULT_MAP.get(low)
     if 'mn' in low and 'ea' in low:
-        return theme_fonts.get('minor_eastAsia')
+        mapped = theme_fonts.get('minor_eastAsia')
+        return mapped if mapped else THEME_PLACEHOLDER_DEFAULT_MAP.get(low)
     if 'mj' in low and ('lt' in low or 'latin' in low):
-        return theme_fonts.get('major_latin')
+        mapped = theme_fonts.get('major_latin')
+        return mapped if mapped else THEME_PLACEHOLDER_DEFAULT_MAP.get(low)
     if 'mn' in low and ('lt' in low or 'latin' in low):
-        return theme_fonts.get('minor_latin')
-    return None
+        mapped = theme_fonts.get('minor_latin')
+        return mapped if mapped else THEME_PLACEHOLDER_DEFAULT_MAP.get(low)
+    # 非标准占位符，直接尝试默认表
+    return THEME_PLACEHOLDER_DEFAULT_MAP.get(low)
 
 
 def _hex_to_rgb_tuple(hex_str: str) -> Tuple[int, int, int]:
@@ -288,6 +263,34 @@ def _get_theme_major_minor_fonts(shape) -> Dict[str, Optional[str]]:
                 # 这些属性名依赖python-pptx实现，做异常保护
                 result['major_latin'] = getattr(major, 'latin', None) and getattr(major.latin, 'typeface', None)
                 result['minor_latin'] = getattr(minor, 'latin', None) and getattr(minor.latin, 'typeface', None)
+                # 尝试从对象属性直接取 eastAsia；若不可用，回退到 element 层解析
+                try:
+                    result['major_eastAsia'] = getattr(major, 'eastAsia', None) and getattr(major.eastAsia, 'typeface', None)
+                except Exception:
+                    pass
+                try:
+                    result['minor_eastAsia'] = getattr(minor, 'eastAsia', None) and getattr(minor.eastAsia, 'typeface', None)
+                except Exception:
+                    pass
+                # 若 eastAsia 仍为空，使用 XML 元素层做健壮解析
+                if not result.get('major_eastAsia') or not result.get('minor_eastAsia'):
+                    try:
+                        maj_el = getattr(major, '_element', None)
+                        min_el = getattr(minor, '_element', None)
+                        def _find_ea_typeface(el):
+                            if el is None:
+                                return None
+                            for c in el:
+                                t = getattr(c, 'tag', '').lower()
+                                if t.endswith('ea') and hasattr(c, 'attrib') and 'typeface' in c.attrib:
+                                    return c.attrib.get('typeface')
+                            return None
+                        if not result.get('major_eastAsia'):
+                            result['major_eastAsia'] = _find_ea_typeface(maj_el)
+                        if not result.get('minor_eastAsia'):
+                            result['minor_eastAsia'] = _find_ea_typeface(min_el)
+                    except Exception:
+                        pass
             except Exception:
                 pass
     except Exception:
@@ -359,8 +362,6 @@ def _get_shape_lststyle_font(shape, para_level: int) -> Optional[str]:
         pass
     return None
 
-
-# 注：移除启发式字体猜测，避免误判。
 
 def _get_master_textstyle_font(shape, para_level: int) -> Optional[str]:
     """从母版 textStyles 中按段落层级提取缺省字体(typeface)。
@@ -701,6 +702,8 @@ def _get_text_block_info(shape, shape_index: int) -> Dict[str, Any]:
                     text_payload["拼接字符"] = serialize_text_block_to_diff_string({text_key: text_payload}, initial_label="初始的字符所有属性")
                 except Exception:
                     text_payload["拼接字符"] = ""
+                # 输出时不包含“字符属性”明细，仅保留拼接字符等元信息
+                text_payload.pop("字符属性", None)
                 text_info = {text_key: text_payload}
     except Exception as e:
         print(f"提取文本块信息失败: {e}")
@@ -745,15 +748,30 @@ def parse_pptx(path: str, include_images: bool = False) -> List[Dict[str, Any]]:
         slides_data: List[Dict[str, Any]] = []
         for slide_index, slide in enumerate(prs.slides):
             page_map: Dict[str, Any] = {}
-            sorted_shapes = sorted(slide.shapes, key=lambda s: (s.top, s.left))
-            for shape_index, shape in enumerate(sorted_shapes):
+            # 为每页添加 1-based 页码
+            page_map["页码"] = slide_index + 1
+            # 按 example_parsing_data.json 格式组织：文本块数组 + 图片数组
+            text_blocks: List[Dict[str, Any]] = []
+            images: List[Dict[str, Any]] = []
+            # 注意：保持 PowerPoint 原始形状顺序，即形状树中的叠放层级顺序（从底到顶）
+            # 计划对应：修正"图层编号"含义为上下覆盖关系，而非几何位置排序
+            for shape_index, shape in enumerate(slide.shapes):
                 text_info = _get_text_block_info(shape, shape_index)
                 if text_info:
-                    page_map.update(text_info)
+                    # 提取文本块内容到数组
+                    for key, payload in text_info.items():
+                        if key.startswith("文本块"):
+                            text_blocks.append(payload)
                 if include_images:
                     image_info = _get_image_info(shape, shape_index)
                     if image_info:
-                        page_map.update(image_info)
+                        # 提取图片内容到数组
+                        for key, payload in image_info.items():
+                            if key.startswith("图片"):
+                                images.append(payload)
+            # 按格式要求组装页面数据
+            page_map["文本块"] = text_blocks
+            page_map["图片"] = images
             slides_data.append(page_map)
         return slides_data
     except Exception as e:
@@ -774,7 +792,7 @@ if __name__ == "__main__":
     # 命令行参数：--include-images 控制是否输出图片信息（默认不输出）
     import argparse
     parser = argparse.ArgumentParser(description="PPTX解析器")
-    parser.add_argument("pptx", nargs='?', default="example1.pptx", help="PPTX 文件路径")
+    parser.add_argument("pptx", nargs='?', default="example2.pptx", help="PPTX 文件路径")
     parser.add_argument("--include-images", action="store_true", help="是否输出图片信息，默认否")
     args = parser.parse_args()
 
@@ -785,18 +803,16 @@ if __name__ == "__main__":
     if result:
         print(f"✅ 成功解析，共 {len(result)} 页")
         save_to_json(result, "parsing_result_new.json")
-        first_page = result[0]
-        print(f"\n📄 第一页包含 {len(first_page)} 个元素")
         for i in range(len(result[:5])):
             print(f"第 {i+1} 页:")
-            for k, v in result[i].items():
-                v.pop("字符属性")
-                print(k, v)
-                # break
-                # if k.startswith("文本块"):
-                #     s = v.get("拼接字符", "")
-                #     print(s)    
-                #     # break
+            page = result[i]
+            print(f"页码: {page.get('页码')}")
+            print(f"文本块数量: {len(page.get('文本块', []))}")
+            print(f"图片数量: {len(page.get('图片', []))}")
+            # 显示前几个文本块的关键信息
+            for j, text_block in enumerate(page.get('文本块', [])[:3]):
+                print(f"  文本块{j+1}: 位置={text_block.get('文本块位置', {})}, 标题占位符={text_block.get('是否是标题占位符')}")
+            print()
     else:
         print("❌ 解析失败")
 
