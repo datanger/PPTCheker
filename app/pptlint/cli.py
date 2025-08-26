@@ -7,8 +7,6 @@ from typing import List
 from rich import print
 
 from .config import load_config, ToolConfig
-from .parser import parse_pptx
-from .rules import run_basic_rules
 from .reporter import render_markdown
 
 

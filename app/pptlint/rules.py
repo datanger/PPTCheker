@@ -1,5 +1,6 @@
 """
-基础规则实现（对应任务：实现基础规则：字体字号、缩略语、色调一致、颜色数量）
+基础规则实现（对应任务：实现基础规则：字体字号、颜色数量等明确格式检查）
+删除涉及语义理解的规则，这些交给大模型处理
 """
 import re
 from collections import defaultdict
@@ -19,6 +20,7 @@ def _is_color_equal(c1: Color, c2: Color, tol: int = 10) -> bool:
 
 
 def check_font_and_size(doc: DocumentModel, cfg: ToolConfig) -> List[Issue]:
+    """检查字体和字号（明确的格式规范）"""
     issues: List[Issue] = []
     for slide in doc.slides:
         for shp in slide.shapes:
@@ -52,36 +54,8 @@ def check_font_and_size(doc: DocumentModel, cfg: ToolConfig) -> List[Issue]:
     return issues
 
 
-_ACRONYM_RE = re.compile(r"\b([A-Z]{2,8})\b")
-
-
-def check_acronym_explanation(doc: DocumentModel, cfg: ToolConfig) -> List[Issue]:
-    issues: List[Issue] = []
-    seen = set()
-    for slide in doc.slides:
-        slide_text = " ".join(tr.text for shp in slide.shapes for tr in shp.text_runs)
-        for m in _ACRONYM_RE.finditer(slide_text):
-            ac = m.group(1)
-            if len(ac) < cfg.acronym_min_len or len(ac) > cfg.acronym_max_len:
-                continue
-            if ac not in seen:
-                # 简单策略：同页是否存在括号或冒号解释
-                if not re.search(rf"\b{ac}\b\s*(\(|：|:)", slide_text):
-                    issues.append(Issue(
-                        file=doc.file_path,
-                        slide_index=slide.index,
-                        object_ref="page",
-                        rule_id="AcronymRule",
-                        severity="info",
-                        message=f"缩略语 {ac} 首次出现未发现解释",
-                        suggestion=f"在首次出现后添加解释：{ac}: <全称>",
-                        can_autofix=False,
-                    ))
-                seen.add(ac)
-    return issues
-
-
 def check_color_count(doc: DocumentModel, cfg: ToolConfig) -> List[Issue]:
+    """检查颜色数量（明确的格式规范）"""
     issues: List[Issue] = []
     for slide in doc.slides:
         color_set = set()
@@ -107,14 +81,15 @@ def check_color_count(doc: DocumentModel, cfg: ToolConfig) -> List[Issue]:
 
 
 def check_theme_harmony(doc: DocumentModel, cfg: ToolConfig) -> List[Issue]:
+    """检查主题色调一致性（预留接口，待完善）"""
     # 简化：由于主题色提取依赖更深入的母版解析，这里先留空返回[]，后续演进
     return []
 
 
 def run_basic_rules(doc: DocumentModel, cfg: ToolConfig) -> List[Issue]:
+    """运行基础规则（只包含明确的格式检查）"""
     issues: List[Issue] = []
     issues += check_font_and_size(doc, cfg)
-    issues += check_acronym_explanation(doc, cfg)
     issues += check_color_count(doc, cfg)
     issues += check_theme_harmony(doc, cfg)
     return issues

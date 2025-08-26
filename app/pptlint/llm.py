@@ -27,9 +27,11 @@ def _resolve_endpoint(model: Optional[str], explicit_endpoint: Optional[str]) ->
 
 class LLMClient:
     def __init__(self, endpoint: Optional[str] = None, api_key: Optional[str] = None, model: Optional[str] = None):
+        # 默认使用 deepseek-chat 模型
         self.model = model or os.getenv("LLM_MODEL", "deepseek-chat")
         self.endpoint = _resolve_endpoint(self.model, endpoint)
-        self.api_key = api_key or os.getenv("LLM_API_KEY")
+        # 优先使用 DEEPSEEK_API_KEY，其次使用 LLM_API_KEY
+        self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
 
     def is_enabled(self) -> bool:
         return bool(self.endpoint and self.api_key)

@@ -51,7 +51,7 @@ pptlint --input <file_or_dir> \
         --user-req "docs/审查需求文档.md" \
         --config configs/config.yaml \
         --mode review|edit \
-        --output-ppt out/标记版.pptx \
+        --output-ppt 标记版.pptx \
         --llm deepseek  # 可选
 ```
 

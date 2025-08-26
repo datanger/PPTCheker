@@ -25,6 +25,10 @@ class TextRun:
     font_name: Optional[str]
     font_size_pt: Optional[float]
     language_tag: Optional[str] = None
+    # 新增：标题识别相关字段
+    is_bold: Optional[bool] = None
+    is_italic: Optional[bool] = None
+    is_underline: Optional[bool] = None
 
 
 @dataclass
@@ -36,6 +40,11 @@ class Shape:
     text_color: Optional[Color] = None
     fill_color: Optional[Color] = None
     border_color: Optional[Color] = None
+    # 新增：标题识别相关字段
+    is_title: Optional[bool] = None
+    title_level: Optional[int] = None  # 1=H1(主标题), 2=H2(章节标题), 3=H3(子标题)
+    is_toc: Optional[bool] = None  # 是否为目录页面
+    position: Optional[tuple] = None  # 位置信息 (left, top, width, height)
 
 
 @dataclass
@@ -43,6 +52,10 @@ class Slide:
     index: int
     shapes: List[Shape] = field(default_factory=list)
     theme_colors: List[Color] = field(default_factory=list)
+    # 新增：标题识别相关字段
+    slide_title: Optional[str] = None  # 页面标题
+    slide_type: Optional[str] = None  # 页面类型：title, content, toc, chapter等
+    chapter_info: Optional[dict] = None  # 章节信息
 
 
 @dataclass

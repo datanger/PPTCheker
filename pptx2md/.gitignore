@@ -1,0 +1,11 @@
+.pypirc
+pptx2md.egg-info/
+dist/
+build/
+.venv/
+.vscode/
+publish.bat
+*.pyc
+pptx2md/pptx2md.code-workspace
+/pptx2md/img
+*.qmd
