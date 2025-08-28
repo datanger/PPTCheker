@@ -7,31 +7,73 @@
 - 不覆盖原文件，另存为副本。
 """
 from collections import defaultdict
-from typing import List
+from typing import List, Optional
 from pptx import Presentation
 from pptx.util import Pt, Inches
 
 from .model import Issue
+from .llm import LLMClient
 
 
 def _contains_acronym(text: str) -> bool:
     """检查文本是否包含需要解释的缩略语"""
-    # 常见的需要解释的专业缩略语
-    professional_acronyms = [
-        'LLM', 'MCP', 'UFO', 'GPT', 'BERT', 'CNN', 'RNN', 'LSTM', 'GRU',
-        'SVM', 'KNN', 'PCA', 'SVD', 'NLP', 'CV', 'ASR', 'TTS', 'OCR',
-        'GAN', 'VAE', 'DQN', 'PPO', 'A3C', 'TRPO', 'SAC', 'TD3'
-    ]
+    # 使用简单的启发式方法检测可能的缩略语
+    # 大写字母组合，长度在2-10之间
+    import re
+    potential_acronyms = re.findall(r'\b[A-Z]{2,10}\b', text)
     
-    # 检查是否包含专业缩略语
-    for acronym in professional_acronyms:
-        if acronym in text:
+    # 过滤掉一些明显不是缩略语的常见词汇
+    common_words = {'THE', 'AND', 'FOR', 'ARE', 'BUT', 'NOT', 'YOU', 'ALL', 'CAN', 'HER', 'WAS', 'ONE', 'OUR', 'OUT', 'DAY', 'GET', 'HAS', 'HIM', 'HIS', 'HOW', 'MAN', 'NEW', 'NOW', 'OLD', 'SEE', 'TWO', 'WAY', 'WHO', 'BOY', 'DID', 'ITS', 'LET', 'PUT', 'SAY', 'SHE', 'TOO', 'USE'}
+    
+    acronyms = [acronym for acronym in potential_acronyms if acronym not in common_words]
+    
+    return len(acronyms) > 0
+
+
+def _is_acronym_adequately_explained(text: str, acronym: str, llm_client: Optional[LLMClient] = None) -> bool:
+    """使用LLM判断缩略语是否已经被充分解释"""
+    if llm_client is None:
+        # 如果没有LLM客户端，使用简单的启发式判断
+        # 检查是否包含冒号、括号等解释性标点
+        explanation_indicators = [':', '：', '(', '（', '（', '）', '是', '为', '指', '即']
+        return any(indicator in text for indicator in explanation_indicators)
+    
+    try:
+        # 构建LLM提示词
+        prompt = f"""请判断以下文本中的缩略语"{acronym}"是否已经被充分解释。
+
+文本内容：
+{text}
+
+请分析：
+1. 该缩略语是否出现
+2. 是否提供了完整的解释（包括全称和含义）
+3. 解释是否清晰易懂
+
+请只回答"是"或"否"。
+
+回答："""
+        
+        response = llm_client.chat(prompt)
+        # 清理响应，提取"是"或"否"
+        response_text = response.strip().lower()
+        if '是' in response_text and '否' not in response_text:
             return True
-    
-    return False
+        elif '否' in response_text and '是' not in response_text:
+            return False
+        else:
+            # 如果LLM回答不明确，使用启发式判断
+            explanation_indicators = [':', '：', '(', '（', '（', '）', '是', '为', '指', '即']
+            return any(indicator in text for indicator in explanation_indicators)
+            
+    except Exception as e:
+        print(f"LLM判断缩略语解释失败: {e}")
+        # 回退到启发式判断
+        explanation_indicators = [':', '：', '(', '（', '（', '）', '是', '为', '指', '即']
+        return any(indicator in text for indicator in explanation_indicators)
 
 
-def annotate_pptx(src_path: str, issues: List[Issue], output_path: str) -> None:
+def annotate_pptx(src_path: str, issues: List[Issue], output_path: str, llm_client: Optional[LLMClient] = None) -> None:
     prs = Presentation(src_path)
 
     # 按页聚合问题
@@ -127,16 +169,33 @@ def annotate_pptx(src_path: str, issues: List[Issue], output_path: str) -> None:
                             
                             print(f"    📝 形状 {sid} 文本内容: {text_content[:50]}...")
                             
-                            # 检查是否包含需要解释的缩略语
+                            # 智能检测缩略语是否需要解释
                             if _contains_acronym(text_content):
-                                hit_rules.append(issue.rule_id)
-                                print(f"    ✅ 智能匹配: 形状 {sid} 包含缩略语，标记为 {issue.rule_id}")
+                                # 提取检测到的缩略语
+                                import re
+                                potential_acronyms = re.findall(r'\b[A-Z]{2,10}\b', text_content)
+                                common_words = {'THE', 'AND', 'FOR', 'ARE', 'BUT', 'NOT', 'YOU', 'ALL', 'CAN', 'HER', 'WAS', 'ONE', 'OUR', 'OUT', 'DAY', 'GET', 'HAS', 'HIM', 'HIS', 'HOW', 'MAN', 'NEW', 'NOW', 'OLD', 'SEE', 'TWO', 'WAY', 'WHO', 'BOY', 'DID', 'ITS', 'LET', 'PUT', 'SAY', 'SHE', 'TOO', 'USE'}
+                                acronyms = [acronym for acronym in potential_acronyms if acronym not in common_words]
+                                
+                                # 检查每个缩略语是否已经被充分解释
+                                needs_explanation = False
+                                for acronym in acronyms:
+                                    if not _is_acronym_adequately_explained(text_content, acronym, llm_client):
+                                        needs_explanation = True
+                                        print(f"    🔍 缩略语 {acronym} 需要解释")
+                                        break
+                                
+                                if needs_explanation:
+                                    hit_rules.append(issue.rule_id)
+                                    print(f"    ✅ 智能匹配: 形状 {sid} 包含需要解释的缩略语，标记为 {issue.rule_id}")
+                                else:
+                                    print(f"    ✅ 形状 {sid} 的缩略语已被充分解释，跳过标记")
                             else:
                                 print(f"    ❌ 形状 {sid} 不包含缩略语，跳过标记")
-                        else:
-                            # 对于其他LLM规则，暂时跳过
-                            print(f"    ⚠️ 跳过非缩略语LLM规则: {issue.rule_id}")
-                            pass
+                    else:
+                        # 对于其他LLM规则，暂时跳过
+                        print(f"    ⚠️ 跳过非缩略语LLM规则: {issue.rule_id}")
+                        pass
                 # 匹配方式3：title_X格式匹配（页面标题）
                 elif issue.object_ref.startswith("title_") and issue.object_ref.endswith(f"_{s_idx}"):
                     # 对于标题问题，我们标记该页面的标题对象
@@ -148,8 +207,46 @@ def annotate_pptx(src_path: str, issues: List[Issue], output_path: str) -> None:
                         print(f"    标题备用匹配: 形状 {sid} 是第一个形状，标记为 {issue.rule_id}")
                 # 匹配方式4：page_X格式匹配（页面级别问题）
                 elif issue.object_ref.startswith("page_") and issue.object_ref.endswith(f"_{s_idx}"):
-                    # 对于页面级别问题，我们标记该页面的所有文本对象
-                    hit_rules.append(issue.rule_id)
+                    # 对于页面级别问题，我们需要检查文本内容是否包含相关缩略语
+                    if issue.rule_id == "LLM_AcronymRule":
+                        # 检查文本内容是否包含缩略语
+                        text_content = ""
+                        try:
+                            for para in shp.text_frame.paragraphs:
+                                for run in para.runs:
+                                    text_content += run.text + " "
+                        except:
+                            text_content = ""
+                        
+                        print(f"    🔍 检查page_X匹配: {issue.object_ref} -> 页面 {s_idx}")
+                        print(f"    📝 形状 {sid} 文本内容: {text_content[:50]}...")
+                        
+                        # 智能检测缩略语是否需要解释
+                        if _contains_acronym(text_content):
+                            # 提取检测到的缩略语
+                            import re
+                            potential_acronyms = re.findall(r'\b[A-Z]{2,10}\b', text_content)
+                            common_words = {'THE', 'AND', 'FOR', 'ARE', 'BUT', 'NOT', 'YOU', 'ALL', 'CAN', 'HER', 'WAS', 'ONE', 'OUR', 'OUT', 'DAY', 'GET', 'HAS', 'HIM', 'HIS', 'HOW', 'MAN', 'NEW', 'NOW', 'OLD', 'SEE', 'TWO', 'WAY', 'WHO', 'BOY', 'DID', 'ITS', 'LET', 'PUT', 'SAY', 'SHE', 'TOO', 'USE'}
+                            acronyms = [acronym for acronym in potential_acronyms if acronym not in common_words]
+                            
+                            # 检查每个缩略语是否已经被充分解释
+                            needs_explanation = False
+                            for acronym in acronyms:
+                                if not _is_acronym_adequately_explained(text_content, acronym, llm_client):
+                                    needs_explanation = True
+                                    print(f"    🔍 缩略语 {acronym} 需要解释")
+                                    break
+                            
+                            if needs_explanation:
+                                hit_rules.append(issue.rule_id)
+                                print(f"    ✅ 页面级别匹配: 形状 {sid} 包含需要解释的缩略语，标记为 {issue.rule_id}")
+                            else:
+                                print(f"    ✅ 形状 {sid} 的缩略语已被充分解释，跳过标记")
+                        else:
+                            print(f"    ❌ 形状 {sid} 不包含缩略语，跳过标记")
+                    else:
+                        # 对于其他LLM规则，直接添加
+                        hit_rules.append(issue.rule_id)
                 # 匹配方式5：page级别的问题（向后兼容）
                 elif issue.object_ref == "page":
                     # 对于page级别问题，我们标记该页面的所有文本对象
@@ -185,11 +282,12 @@ def annotate_pptx(src_path: str, issues: List[Issue], output_path: str) -> None:
                     print(f"    -> 包含LLM规则，将应用样式和标记")
             
             try:
-                # 对现有 runs 施加样式：红色 + 斜体 + 下划线
+                # 对现有 runs 施加样式：红色 + 下划线（不倾斜）
                 for para in shp.text_frame.paragraphs:
                     for r in para.runs:
                         if r.font is not None:
-                            r.font.italic = True
+                            # 取消倾斜
+                            r.font.italic = False
                             # 优先设置为波浪线，不支持则退化为普通下划线
                             try:
                                 from pptx.enum.text import MSO_TEXT_UNDERLINE
@@ -211,6 +309,12 @@ def annotate_pptx(src_path: str, issues: List[Issue], output_path: str) -> None:
                     tail.text = " 【标记: 规范问题】"
                 if tail.font is not None:
                     tail.font.size = Pt(10)
+                    # 将标记文字设为蓝色
+                    try:
+                        from pptx.dml.color import RGBColor
+                        tail.font.color.rgb = RGBColor(0, 0, 255)
+                    except Exception:
+                        pass
             except Exception as e:
                 # 不阻断流程，记录错误
                 print(f"标记形状 {sid} 时出错: {e}")

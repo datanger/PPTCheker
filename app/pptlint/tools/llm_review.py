@@ -8,9 +8,18 @@
 """
 import json
 from typing import List, Dict, Any, Optional
-from .model import DocumentModel, Issue, TextRun
-from .llm import LLMClient
-from .config import ToolConfig
+try:
+    from ..model import DocumentModel, Issue, TextRun
+    from ..llm import LLMClient
+    from ..config import ToolConfig
+except ImportError:
+    # 兼容直接运行的情况
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from model import DocumentModel, Issue, TextRun
+    from llm import LLMClient
+    from config import ToolConfig
 
 
 class LLMReviewer:
@@ -19,10 +28,17 @@ class LLMReviewer:
     def __init__(self, llm: LLMClient, config: ToolConfig):
         self.llm = llm
         self.config = config
+    
+    def _clean_json_response(self, response: str) -> str:
+        """清理LLM响应中的markdown代码块标记"""
+        cleaned_response = response.strip()
+        if cleaned_response.startswith('```json'):
+            cleaned_response = cleaned_response[7:]
+        if cleaned_response.endswith('```'):
+            cleaned_response = cleaned_response[:-3]
+        return cleaned_response.strip()
         
-    def is_enabled(self) -> bool:
-        """检查LLM是否可用"""
-        return self.llm.is_enabled()
+
     
     def extract_slide_content(self, doc: DocumentModel) -> List[Dict[str, Any]]:
         """提取幻灯片内容，转换为LLM可理解的格式"""
@@ -82,11 +98,11 @@ class LLMReviewer:
             
         return slides_content
     
-    def review_format_standards(self, slides_content: List[Dict]) -> List[Issue]:
+    def review_format_standards(self, parsing_data: Dict[str, Any]) -> List[Issue]:
         """审查格式标准：字体、字号、颜色等"""
-        if not self.is_enabled():
-            return []
-            
+        # 提取页面内容
+        pages = parsing_data.get("contents", [])
+        
         prompt = f"""
             你是一个专业的PPT格式审查专家。请分析以下PPT内容，检查格式规范问题：
 
@@ -96,7 +112,7 @@ class LLMReviewer:
             - 单页颜色数：不超过{self.config.color_count_threshold}种
 
             PPT内容：
-            {json.dumps(slides_content, ensure_ascii=False, indent=2)}
+            {json.dumps(pages, ensure_ascii=False, indent=2)}
 
             **重要**：请为每个问题提供页面级别的对象引用，格式如下：
             - 如果问题影响整个页面：使用 "page_[页码]"
@@ -124,7 +140,8 @@ class LLMReviewer:
             response = self.llm.complete(prompt, max_tokens=1024)
             if response:
                 # 尝试解析JSON响应
-                result = json.loads(response.strip())
+                cleaned_response = self._clean_json_response(response)
+                result = json.loads(cleaned_response)
                 issues = []
                 
                 for item in result.get("issues", []):
@@ -146,11 +163,11 @@ class LLMReviewer:
             
         return []
     
-    def review_content_logic(self, slides_content: List[Dict]) -> List[Issue]:
+    def review_content_logic(self, parsing_data: Dict[str, Any]) -> List[Issue]:
         """审查内容逻辑：连贯性、术语一致性、表达流畅性"""
-        if not self.is_enabled():
-            return []
-            
+        # 提取页面内容
+        pages = parsing_data.get("contents", [])
+        
         prompt = f"""
             你是一个专业的PPT内容审查专家。请分析以下PPT内容，检查内容逻辑问题：
 
@@ -161,7 +178,7 @@ class LLMReviewer:
             4. 内容完整性：是否遗漏重要信息
 
             PPT内容：
-            {json.dumps(slides_content, ensure_ascii=False, indent=2)}
+            {json.dumps(pages, ensure_ascii=False, indent=2)}
 
             **重要**：请为每个问题提供页面级别的对象引用，格式如下：
             - 如果问题影响整个页面：使用 "page_[页码]"
@@ -210,16 +227,14 @@ class LLMReviewer:
             
         return []
     
-    def review_acronyms(self, slides_content: List[Dict]) -> List[Issue]:
+    def review_acronyms(self, parsing_data: Dict[str, Any]) -> List[Issue]:
         """智能审查缩略语：基于LLM理解上下文，只标记真正需要解释的缩略语"""
-        if not self.is_enabled():
-            print("    LLM未启用，跳过缩略语审查")
-            return []
-            
-        print(f"    🧠 开始缩略语审查，分析 {len(slides_content)} 个页面...")
+        # 提取页面内容
+        pages = parsing_data.get("contents", [])
+        print(f"    🧠 开始缩略语审查，分析 {len(pages)} 个页面...")
             
         prompt = f"""
-            你是一个专业的PPT内容审查专家，专门负责缩略语使用审查。
+            你是一个专业的PPT内容审查专家，找到PPT内所有需要解释的缩略语， 只需标记首次出现但未在该页面内解释的缩略语。
 
             审查原则：
             1. **常见缩略语不需要解释**：如API、URL、HTTP、HTML、CSS、JS、SQL、GUI、CLI、IDE、SDK、CPU、GPU、RAM、USB、WiFi、GPS、TV、DVD、CD、MP3、MP4、PDF、PPT、AI、ML、DL、VR、AR、IoT、CEO、CTO、CFO、HR、IT、PR、QA、UI、UX、PM、USA、UK、EU、UN、WHO、NASA、FBI、CIA、THANKS、OK、FAQ、ASAP、FYI、IMO、BTW、LOL、OMG等
@@ -227,17 +242,15 @@ class LLMReviewer:
             3. **判断标准**：基于目标读者群体（假设是IT行业专业人士）的知识水平来判断
 
             PPT内容：
-            {json.dumps(slides_content, ensure_ascii=False, indent=2)}
+            {json.dumps(pages, ensure_ascii=False, indent=2)}
 
             请分析每个缩略语，判断是否需要解释。只标记那些：
             - 目标读者可能不理解的
             - 首次出现且缺乏解释的
             - 专业性强或行业特定的
 
-            **重要**：请为每个问题提供精确的对象引用，格式如下：
-            - 如果缩略语在特定文本块中：使用 "text_block_[页码]_[块索引]"
-            - 如果缩略语在页面标题中：使用 "title_[页码]"
-            - 如果缩略语在页面级别且无法精确定位：使用 "page_[页码]"
+            主观评判标准：
+            假设你是一个公司的高层领导在审查下面员工的PPT汇报材料，你不太懂专业领域术语，当在查看某页PPT时，看到某个缩略语不太懂其中的含义，但未在该页内找到解释，你认为需要解释，则标记为需要解释。
 
             请以JSON格式返回审查结果，格式如下：
             {{
@@ -245,8 +258,8 @@ class LLMReviewer:
                     {{
                         "rule_id": "LLM_AcronymRule",
                         "severity": "info",
-                        "slide_index": 0,
-                        "object_ref": "text_block_0_1",
+                        "slide_index": 0（注意替换成实际页码）,
+                        "object_ref": "page_0（注意替换成实际页码）",
                         "message": "专业缩略语 [缩略语名称] 首次出现未发现解释",
                         "suggestion": "建议在首次出现后添加解释：[缩略语名称] (全称)",
                         "can_autofix": false
@@ -263,7 +276,8 @@ class LLMReviewer:
             print(f"    📥 收到LLM响应: {response[:100] if response else 'None'}...")
             
             if response:
-                result = json.loads(response.strip())
+                cleaned_response = self._clean_json_response(response)
+                result = json.loads(cleaned_response)
                 issues = []
                 
                 for item in result.get("issues", []):
@@ -290,12 +304,11 @@ class LLMReviewer:
             traceback.print_exc()
             return []
     
-    def review_title_structure(self, slides_content: List[Dict]) -> List[Issue]:
+    def review_title_structure(self, parsing_data: Dict[str, Any]) -> List[Issue]:
         """审查标题结构：目录、章节、页面标题的层级一致性和逻辑连贯性"""
-        if not self.is_enabled():
-            return []
-            
         print("    📋 审查标题结构...")
+        # 提取页面内容
+        pages = parsing_data.get("contents", [])
         
         prompt = f"""
             你是一个专业的PPT标题结构审查专家。请分析以下PPT内容，检查标题结构问题：
@@ -308,7 +321,7 @@ class LLMReviewer:
             5. **页面标题**：检查每页标题是否清晰、准确反映页面内容
 
             PPT内容：
-            {json.dumps(slides_content, ensure_ascii=False, indent=2)}
+            {json.dumps(pages, ensure_ascii=False, indent=2)}
 
             **重要**：请为每个问题提供精确的对象引用，格式如下：
             - 如果问题影响整个页面：使用 "page_[页码]"
@@ -336,7 +349,8 @@ class LLMReviewer:
         try:
             response = self.llm.complete(prompt, max_tokens=1024)
             if response:
-                result = json.loads(response.strip())
+                cleaned_response = self._clean_json_response(response)
+                result = json.loads(cleaned_response)
                 issues = []
                 
                 for item in result.get("issues", []):
@@ -365,9 +379,6 @@ class LLMReviewer:
     
     def run_llm_review(self, doc: DocumentModel) -> List[Issue]:
         """运行完整的LLM审查流程"""
-        if not self.is_enabled():
-            return []
-            
         print("🤖 启动LLM智能审查...")
         
         # 提取内容

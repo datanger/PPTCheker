@@ -14,7 +14,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from pptx import Presentation
 from pptx.dml.color import RGBColor, MSO_THEME_COLOR
 from pptx.enum.shapes import PP_PLACEHOLDER, MSO_SHAPE_TYPE
-from serializer import serialize_text_block_to_diff_string
+# 本文件不再生成“拼接字符”，改为直接输出“段落属性”（按 run 维度）
 
 # 删除的字段及原因：
 # - 图片质量：无法直接获取，需要图像分析
@@ -44,27 +44,16 @@ THEME_PLACEHOLDER_DEFAULT_MAP = {
     "+mj-lt": "Calibri",
 }
 
-
-def _map_theme_placeholder_to_font(name: str, theme_fonts: Dict[str, Optional[str]]) -> Optional[str]:
-    # 先尝试使用主题提供的具体字体；若无，则回退到内置占位符默认映射
-    if not isinstance(name, str) or not name.startswith('+'):
-        return None
-    low = name.lower()
-    # 主题字体优先
-    if 'mj' in low and 'ea' in low:
-        mapped = theme_fonts.get('major_eastAsia')
-        return mapped if mapped else THEME_PLACEHOLDER_DEFAULT_MAP.get(low)
-    if 'mn' in low and 'ea' in low:
-        mapped = theme_fonts.get('minor_eastAsia')
-        return mapped if mapped else THEME_PLACEHOLDER_DEFAULT_MAP.get(low)
-    if 'mj' in low and ('lt' in low or 'latin' in low):
-        mapped = theme_fonts.get('major_latin')
-        return mapped if mapped else THEME_PLACEHOLDER_DEFAULT_MAP.get(low)
-    if 'mn' in low and ('lt' in low or 'latin' in low):
-        mapped = theme_fonts.get('minor_latin')
-        return mapped if mapped else THEME_PLACEHOLDER_DEFAULT_MAP.get(low)
-    # 非标准占位符，直接尝试默认表
-    return THEME_PLACEHOLDER_DEFAULT_MAP.get(low)
+# 用于在JSON层面合并相邻run：比较除“段落内容”外的样式是否一致
+ATTR_COMPARE_KEYS = [
+    "字体类型",
+    "字号",
+    "字体颜色",
+    "是否粗体",
+    "是否斜体",
+    "是否下划线",
+    "是否带删除线",
+]
 
 
 def _hex_to_rgb_tuple(hex_str: str) -> Tuple[int, int, int]:
@@ -126,25 +115,150 @@ def _rgb_to_hex(color) -> Optional[str]:
     return None
 
 
+# 将常见颜色的十六进制值映射为中文颜色名；其余按“灰色”近似
+COMMON_COLOR_NAME_TO_RGB = {
+    "黑色": (0, 0, 0),
+    "白色": (255, 255, 255),
+    "红色": (255, 0, 0),
+    "绿色": (0, 255, 0),
+    "蓝色": (0, 0, 255),
+    "黄色": (255, 255, 0),
+    "橙色": (255, 165, 0),
+    "紫色": (128, 0, 128),
+    "灰色": (128, 128, 128),
+}
+
+
+def _hex_to_cn_color_name(hex_color: str) -> str:
+    """将 #RRGGBB 映射为最接近的常见中文颜色名。"""
+    try:
+        r, g, b = _hex_to_rgb_tuple(hex_color)
+        best_name = "灰色"
+        best_dist = float("inf")
+        for name, (cr, cg, cb) in COMMON_COLOR_NAME_TO_RGB.items():
+            dist = (r - cr) ** 2 + (g - cg) ** 2 + (b - cb) ** 2
+            if dist < best_dist:
+                best_dist = dist
+                best_name = name
+        return best_name
+    except Exception:
+        return "灰色"
+
+
+def _merge_font_family_alias(raw_name: Optional[str]) -> str:
+    """合并常见字体族别名/派生名到主名。
+    规则示例：
+    - "宋体"、"宋体-正文"、"宋体-标题" → "宋体"
+    - "Meiryo"、"Meiryo-正文"、"Meiryo-Regular" → "Meiryo"
+    其它字体保持原样；空值返回 "未知"。
+    """
+    if not isinstance(raw_name, str) or not raw_name.strip():
+        return "未知"
+    name = raw_name.strip()
+    low = name.lower()
+    # 去掉常见的后缀标记
+    strip_suffixes = ["-正文", "-标题", "-regular", " regular", " bold", "-bold", " italic", "-italic"]
+    for suf in strip_suffixes:
+        if low.endswith(suf):
+            name = name[: len(name) - len(suf)]
+            low = name.lower()
+            break
+    # 统一 Meiryo 派生
+    if "meiryo" in low:
+        return "Meiryo"
+    # 统一 宋体 派生
+    if "宋体" in name:
+        return "宋体"
+    return name
+
+
 def _get_shape_position(shape) -> Dict[str, str]:
-    """返回形状位置，单位为毫米（mm），并在值中附带单位字符串。
-    PowerPoint内部单位为EMU，换算：1 mm = 36000 EMU。
+    """返回形状位置，单位为百分比（%），相对左上角。
+    PowerPoint内部单位为EMU，需要先获取幻灯片尺寸来计算百分比。
     """
     try:
-        def emu_to_mm_str(emu_val) -> str:
+        # 获取幻灯片尺寸 - 尝试多种方法
+        slide_width = None
+        slide_height = None
+        
+        try:
+            # 方法1：直接从shape.part获取
+            slide_width = shape.part.slide_width
+            slide_height = shape.part.slide_height
+        except Exception:
+            pass
+        
+        try:
+            # 方法2：从slide对象获取
+            if hasattr(shape, 'slide'):
+                slide_width = shape.slide.slide_width
+                slide_height = shape.slide.slide_height
+        except Exception:
+            pass
+        
+        try:
+            # 方法3：从slide_layout获取
+            if hasattr(shape.part, 'slide_layout'):
+                slide_width = shape.part.slide_layout.slide_width
+                slide_height = shape.part.slide_layout.slide_height
+        except Exception:
+            pass
+        
+        # 如果仍然无法获取，使用默认值（标准PPT尺寸：16:9 宽屏 = 9144000 x 6858000 EMU）
+        if slide_width is None or slide_height is None:
+            slide_width = 9144000  # 16:9 宽屏宽度 (10" x 914400 EMU/inch)
+            slide_height = 6858000  # 16:9 宽屏高度 (7.5" x 914400 EMU/inch)
+        
+        # 调试信息：打印实际获取的尺寸
+        if hasattr(shape, '_element') and hasattr(shape._element, 'attrib'):
             try:
-                mm = float(emu_val) / 36000.0
-                return f"{mm:.2f} mm"
+                # 尝试从XML属性获取实际尺寸
+                xml_attrib = shape._element.attrib
+                if 'cx' in xml_attrib and 'cy' in xml_attrib:
+                    actual_width = int(xml_attrib['cx'])
+                    actual_height = int(xml_attrib['cy'])
+                    # 如果XML中的尺寸更合理，使用它
+                    if actual_width > 0 and actual_height > 0:
+                        slide_width = actual_width
+                        slide_height = actual_height
             except Exception:
-                return "0.00 mm"
-        return {
-            "left": emu_to_mm_str(shape.left),
-            "top": emu_to_mm_str(shape.top),
-            "width": emu_to_mm_str(shape.width),
-            "height": emu_to_mm_str(shape.height)
+                pass
+        
+        def emu_to_percent_str(emu_val, slide_dimension) -> str:
+            try:
+                percent = (float(emu_val) / float(slide_dimension)) * 100.0
+                # 不限制百分比范围，显示真实值（可能超过100%）
+                return f"{percent:.2f}%"
+            except Exception:
+                return "0.00%"
+        
+        # 添加调试信息
+        debug_info = {
+            "slide_width_emu": slide_width,
+            "slide_height_emu": slide_height,
+            "shape_left_emu": shape.left,
+            "shape_top_emu": shape.top,
+            "shape_width_emu": shape.width,
+            "shape_height_emu": shape.height
         }
-    except Exception:
-        return {"left": "0.00 mm", "top": "0.00 mm", "width": "0.00 mm", "height": "0.00 mm"}
+        
+        # 计算实际百分比（不限制范围，用于调试）
+        actual_percentages = {
+            "left": (float(shape.left) / float(slide_width)) * 100.0,
+            "top": (float(shape.top) / float(slide_height)) * 100.0,
+            "width": (float(shape.width) / float(slide_width)) * 100.0,
+            "height": (float(shape.height) / float(slide_height)) * 100.0
+        }
+        
+        return {
+            "left": emu_to_percent_str(shape.left, slide_width),
+            "top": emu_to_percent_str(shape.top, slide_height),
+            "width": emu_to_percent_str(shape.width, slide_width),
+            "height": emu_to_percent_str(shape.height, slide_height)
+        }
+    except Exception as e:
+        print(f"获取形状位置失败: {e}")
+        return {"left": "0.00%", "top": "0.00%", "width": "0.00%", "height": "0.00%"}
 
 
 def _is_title_placeholder(shape) -> bool:
@@ -157,145 +271,6 @@ def _is_title_placeholder(shape) -> bool:
     except Exception:
         pass
     return False
-
-
-def _extract_font_props_from_font_obj(font_obj) -> Dict[str, Any]:
-    props: Dict[str, Any] = {}
-    if font_obj is None:
-        return props
-    try:
-        size = getattr(font_obj, 'size', None)
-        color = getattr(font_obj, 'color', None)
-        props.update({
-            "字体类型": getattr(font_obj, 'name', None),
-            "字号": float(size.pt) if size is not None else None,
-            "字体颜色": _rgb_to_hex(color) if color is not None else None,
-            "是否粗体": getattr(font_obj, 'bold', None),
-            "是否斜体": getattr(font_obj, 'italic', None),
-            "是否下划线": getattr(font_obj, 'underline', None),
-            "是否带删除线": getattr(font_obj, 'strike', None),
-        })
-    except Exception:
-        pass
-    return props
-
-
-def _inherit_placeholder_defaults(shape) -> Dict[str, Any]:
-    """从版式/母版占位符继承字体默认值。"""
-    defaults: Dict[str, Any] = {}
-    try:
-        if not getattr(shape, 'is_placeholder', False):
-            return defaults
-        phf = shape.placeholder_format
-        ph_idx = getattr(phf, 'idx', None)
-        slide_layout = getattr(shape.part, 'slide_layout', None)
-        # 1) 版式占位符
-        try:
-            if slide_layout is not None:
-                for p in slide_layout.placeholders:
-                    try:
-                        if getattr(p.placeholder_format, 'idx', None) == ph_idx:
-                            # 取版式占位符的段落字体
-                            if hasattr(p, 'text_frame') and p.text_frame and p.text_frame.paragraphs:
-                                df = _extract_font_props_from_font_obj(p.text_frame.paragraphs[0].font)
-                                defaults.update({k: v for k, v in df.items() if v is not None})
-                            break
-                    except Exception:
-                        continue
-        except Exception:
-            pass
-        # 2) 母版占位符
-        try:
-            master = getattr(slide_layout, 'slide_master', None) if slide_layout is not None else None
-            if master is not None:
-                for p in master.placeholders:
-                    try:
-                        if getattr(p.placeholder_format, 'idx', None) == ph_idx:
-                            if hasattr(p, 'text_frame') and p.text_frame and p.text_frame.paragraphs:
-                                df = _extract_font_props_from_font_obj(p.text_frame.paragraphs[0].font)
-                                defaults.update({k: v for k, v in df.items() if v is not None})
-                            break
-                    except Exception:
-                        continue
-        except Exception:
-            pass
-    except Exception:
-        pass
-    return defaults
-
-
-def _get_theme_major_minor_fonts(shape) -> Dict[str, Optional[str]]:
-    """尝试从主题(fontScheme)获取major/minor字体（latin/eastAsia）。"""
-    result = {"major_latin": None, "major_eastAsia": None, "minor_latin": None, "minor_eastAsia": None}
-    try:
-        slide_layout = getattr(shape.part, 'slide_layout', None)
-        slide_master = getattr(slide_layout, 'slide_master', None) if slide_layout is not None else None
-        theme_part = getattr(slide_master.part, 'theme_part', None) if slide_master is not None else None
-        theme = getattr(theme_part, 'theme', None) if theme_part is not None else None
-        font_scheme = getattr(theme, 'fontScheme', None) if theme is not None else None
-        if font_scheme is None:
-            # python-pptx对象模型可能不同，尝试从element层访问
-            try:
-                theme_el = theme_part._element  # lxml element
-                # 查找a:fontScheme 下的a:majorFont/a:minorFont
-                for child in theme_el.iter():
-                    tag = child.tag.lower()
-                    if tag.endswith('majorfont'):
-                        for f in child:
-                            ftag = f.tag.lower()
-                            if ftag.endswith('latin') and 'typeface' in f.attrib:
-                                result['major_latin'] = f.attrib.get('typeface')
-                            if ftag.endswith('ea') and 'typeface' in f.attrib:  # eastAsia
-                                result['major_eastAsia'] = f.attrib.get('typeface')
-                    if tag.endswith('minorfont'):
-                        for f in child:
-                            ftag = f.tag.lower()
-                            if ftag.endswith('latin') and 'typeface' in f.attrib:
-                                result['minor_latin'] = f.attrib.get('typeface')
-                            if ftag.endswith('ea') and 'typeface' in f.attrib:
-                                result['minor_eastAsia'] = f.attrib.get('typeface')
-            except Exception:
-                pass
-        else:
-            try:
-                major = font_scheme.majorFont
-                minor = font_scheme.minorFont
-                # 这些属性名依赖python-pptx实现，做异常保护
-                result['major_latin'] = getattr(major, 'latin', None) and getattr(major.latin, 'typeface', None)
-                result['minor_latin'] = getattr(minor, 'latin', None) and getattr(minor.latin, 'typeface', None)
-                # 尝试从对象属性直接取 eastAsia；若不可用，回退到 element 层解析
-                try:
-                    result['major_eastAsia'] = getattr(major, 'eastAsia', None) and getattr(major.eastAsia, 'typeface', None)
-                except Exception:
-                    pass
-                try:
-                    result['minor_eastAsia'] = getattr(minor, 'eastAsia', None) and getattr(minor.eastAsia, 'typeface', None)
-                except Exception:
-                    pass
-                # 若 eastAsia 仍为空，使用 XML 元素层做健壮解析
-                if not result.get('major_eastAsia') or not result.get('minor_eastAsia'):
-                    try:
-                        maj_el = getattr(major, '_element', None)
-                        min_el = getattr(minor, '_element', None)
-                        def _find_ea_typeface(el):
-                            if el is None:
-                                return None
-                            for c in el:
-                                t = getattr(c, 'tag', '').lower()
-                                if t.endswith('ea') and hasattr(c, 'attrib') and 'typeface' in c.attrib:
-                                    return c.attrib.get('typeface')
-                            return None
-                        if not result.get('major_eastAsia'):
-                            result['major_eastAsia'] = _find_ea_typeface(maj_el)
-                        if not result.get('minor_eastAsia'):
-                            result['minor_eastAsia'] = _find_ea_typeface(min_el)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-    except Exception:
-        pass
-    return result
 
 
 def _get_para_rfonts(para) -> Optional[str]:
@@ -325,201 +300,24 @@ def _get_para_rfonts(para) -> Optional[str]:
     return None
 
 
-def _get_shape_lststyle_font(shape, para_level: int) -> Optional[str]:
-    """从 shape.text_frame._txBody.lstStyle 的 lvlXpPr.defRPr.rFonts/latin 取字体。"""
-    try:
-        tf = getattr(shape, 'text_frame', None)
-        txBody = getattr(tf, '_txBody', None) if tf is not None else None
-        lstStyle = getattr(txBody, 'lstStyle', None) if txBody is not None else None
-        if lstStyle is None:
-            return None
-        lvl_idx = max(1, (para_level or 0) + 1)
-        # 属性名如 lvl1pPr, lvl2pPr
-        lvl_attr = f'lvl{lvl_idx}pPr'
-        lvl = getattr(lstStyle, lvl_attr, None)
-        defrpr = None
-        if lvl is not None:
-            defrpr = getattr(lvl, 'defRPr', None) or getattr(lvl, 'rPr', None)
-        if defrpr is None:
-            # 直接在 lstStyle 下找 defRPr
-            defrpr = getattr(lstStyle, 'defRPr', None) or getattr(lstStyle, 'rPr', None)
-        if defrpr is None:
-            return None
-        rfonts = getattr(defrpr, 'rFonts', None)
-        if rfonts is not None:
-            name = (
-                getattr(rfonts, 'eastAsia', None)
-                or getattr(rfonts, 'ascii', None)
-                or getattr(rfonts, 'hAnsi', None)
-                or getattr(rfonts, 'cs', None)
-            )
-            if name:
-                return name
-        latin = getattr(defrpr, 'latin', None)
-        if latin is not None and getattr(latin, 'typeface', None):
-            return latin.typeface
-    except Exception:
-        pass
-    return None
-
-
-def _get_master_textstyle_font(shape, para_level: int) -> Optional[str]:
-    """从母版 textStyles 中按段落层级提取缺省字体(typeface)。
-    优先顺序：bodyStyle → headingStyle → titleStyle；层级映射 lvl{n}pPr，n=para_level+1。
-    返回 eastAsia/ascii/hAnsi/cs/latin 中优先可用的 typeface。
-    """
-    try:
-        slide_layout = getattr(shape.part, 'slide_layout', None)
-        slide_master = getattr(slide_layout, 'slide_master', None) if slide_layout is not None else None
-        if slide_master is None:
-            return None
-        root = getattr(slide_master, '_element', None)
-        if root is None:
-            return None
-        # 查找 a:txStyles
-        tx_styles = None
-        for el in root.iter():
-            tag = el.tag.lower()
-            if tag.endswith('txstyles'):
-                tx_styles = el
-                break
-        if tx_styles is None:
-            return None
-        # 目标层级标签名，如 lvl1ppr, lvl2ppr ...
-        lvl_tag = f'lvl{max(1, (para_level or 0) + 1)}ppr'
-        # 在 bodyStyle/headingStyle/titleStyle 依序查找
-        sections = []
-        for child in tx_styles:
-            tag = child.tag.lower()
-            if tag.endswith('bodystyle') or tag.endswith('headingstyle') or tag.endswith('titlestyle'):
-                sections.append(child)
-        # 若没有显式 section，则允许直接在 txStyles 下查 lvlXpPr/defRPr
-        if not sections:
-            sections = [tx_styles]
-
-        for sec_el in sections:
-            # 寻找层级 pPr（可能直接在 txStyles 下，或在 section 下）
-            lvl_el = None
-            for child in sec_el:
-                if child.tag.lower().endswith(lvl_tag):
-                    lvl_el = child
-                    break
-            # 若未找到层级，尝试默认 defRPr
-            defrpr = None
-            if lvl_el is not None:
-                for c in lvl_el:
-                    if c.tag.lower().endswith('defrpr') or c.tag.lower().endswith('rpr'):
-                        defrpr = c
-                        break
-            if defrpr is None:
-                for child in sec_el:
-                    if child.tag.lower().endswith('defrpr') or child.tag.lower().endswith('rpr'):
-                        defrpr = child
-                        break
-            if defrpr is None:
-                continue
-            # 读取 rFonts/latin@typeface
-            east_asia = ascii_v = hansi = cs = latin = None
-            for c in defrpr:
-                t = c.tag.lower()
-                if t.endswith('rfonts'):
-                    east_asia = c.attrib.get('eastasia') or c.attrib.get('ea')
-                    ascii_v = c.attrib.get('ascii')
-                    hansi = c.attrib.get('hansi')
-                    cs = c.attrib.get('cs')
-                if t.endswith('latin') and 'typeface' in c.attrib:
-                    latin = c.attrib.get('typeface')
-            name = east_asia or ascii_v or hansi or cs or latin
-            if name:
-                return name
-        return None
-    except Exception:
-        return None
-
-
-def _get_master_title_font(shape, para_level: int) -> Optional[str]:
-    """专取母版 titleStyle 的默认字体。"""
-    try:
-        slide_layout = getattr(shape.part, 'slide_layout', None)
-        slide_master = getattr(slide_layout, 'slide_master', None) if slide_layout is not None else None
-        if slide_master is None:
-            return None
-        root = getattr(slide_master, '_element', None)
-        if root is None:
-            return None
-        tx_styles = None
-        for el in root.iter():
-            if el.tag.lower().endswith('txstyles'):
-                tx_styles = el
-                break
-        if tx_styles is None:
-            return None
-        lvl_tag = f'lvl{max(1, (para_level or 0) + 1)}ppr'
-        title_sec = None
-        for child in tx_styles:
-            if child.tag.lower().endswith('titlestyle'):
-                title_sec = child
-                break
-        if title_sec is None:
-            return None
-        lvl_el = None
-        for c in title_sec:
-            if c.tag.lower().endswith(lvl_tag):
-                lvl_el = c
-                break
-        defrpr = None
-        if lvl_el is not None:
-            for c in lvl_el:
-                t = c.tag.lower()
-                if t.endswith('defrpr') or t.endswith('rpr'):
-                    defrpr = c
-                    break
-        if defrpr is None:
-            for c in title_sec:
-                t = c.tag.lower()
-                if t.endswith('defrpr') or t.endswith('rpr'):
-                    defrpr = c
-                    break
-        if defrpr is None:
-            return None
-        east_asia = ascii_v = hansi = cs = latin = None
-        for c in defrpr:
-            t = c.tag.lower()
-            if t.endswith('rfonts'):
-                east_asia = c.attrib.get('eastasia') or c.attrib.get('ea')
-                ascii_v = c.attrib.get('ascii')
-                hansi = c.attrib.get('hansi')
-                cs = c.attrib.get('cs')
-            if t.endswith('latin') and 'typeface' in c.attrib:
-                latin = c.attrib.get('typeface')
-        return east_asia or ascii_v or hansi or cs or latin
-    except Exception:
-        return None
-
-
 def _resolve_run_font_props(run, para, is_title_placeholder: bool, host_shape) -> Dict[str, Any]:
-    """解析run的有效字体属性：名称、字号、颜色、粗体、斜体、下划线、删除线。
-    规则：优先run.font，其次para.font，再次版式/母版占位符默认，最后回退默认值。
-    颜色支持主题色映射与亮度换算。缺省回退：字体名“默认”、字号18pt、颜色#000000、布尔样式False。
+    """解析 run 的样式属性。
+    要求：字符类型（字体名称）仅保留 run/paragraph 级别识别：
+    1) run._r.rPr.rFonts/latin
+    2) run.font.name
+    3) para.font.name
+    4) para 的 pPr.rPr.rFonts/latin
+    不再使用占位符、shape.lstStyle、母版textStyles、主题fontScheme等回退。
+    其它属性（字号/颜色/粗斜体/下划线/删除线）维持原有 run/para 级别解析。
     """
     props: Dict[str, Any] = {}
     try:
         rf = run.font
         pf = getattr(para, 'font', None)
-        placeholder_defaults = _inherit_placeholder_defaults(run._r.getparent().getparent()) if hasattr(run, '_r') else {}
-        theme_fonts = _get_theme_major_minor_fonts(run._r.getparent().getparent()) if hasattr(run, '_r') else {}
-        # 字体名解析优先级：
-        # 1) 显式 rFonts（run级）
-        # 2) run.font
-        # 3) para.font
-        # 4) 段落 pPr.rPr.rFonts / latin
-        # 5) 占位符默认
-        # 6) shape 的 lstStyle（txBody）
-        # 7) 母版 textStyles
-        # 8) 主题 major/minor
-        # 9) 脚本启发式猜测（最后）
+        # 字体名解析仅限：run.rPr / run.font / para.font / para.pPr
         name = None
         name_src = None
+        reason = None
         try:
             rPr = run._r.rPr if hasattr(run, '_r') else None
             if rPr is not None and getattr(rPr, 'rFonts', None) is not None:
@@ -548,75 +346,47 @@ def _resolve_run_font_props(run, para, is_title_placeholder: bool, host_shape) -
             if val is not None:
                 name = val
                 name_src = 'para.pPr.rPr.rFonts/latin'
-        if name is None and placeholder_defaults.get("字体类型") is not None:
-            name = placeholder_defaults.get("字体类型")
-            name_src = 'placeholder_defaults'
         if name is None:
-            try:
-                level = getattr(para, 'level', 0)
-                val = _get_shape_lststyle_font(run._r.getparent().getparent(), level) if hasattr(run, '_r') else None
-                if val is not None:
-                    name = val
-                    name_src = 'shape.lstStyle'
-            except Exception:
-                pass
-        # 母版 textStyles 作为进一步回退
-        if name is None:
-            try:
-                level = getattr(para, 'level', 0)
-                val = _get_master_textstyle_font(run._r.getparent().getparent(), level) if hasattr(run, '_r') else None
-                if val is not None:
-                    name = val
-                    name_src = 'master.txStyles'
-            except Exception:
-                pass
-        # 文档级 defaultTextStyle 回退（presentation.xml）
-        # 已移除 presentation.defaultTextStyle 回退
-        # 主题字体方案作为最后回退（若仍为 None）
-        if name is None:
-            val = (
-                theme_fonts.get('major_eastAsia')
-                or theme_fonts.get('major_latin')
-                or theme_fonts.get('minor_eastAsia')
-                or theme_fonts.get('minor_latin')
-            )
-            if val is not None:
-                name = val
-                name_src = 'theme.fontScheme'
-        # 若是标题占位符，优先尝试母版 titleStyle（只做确定性解析）
-        if (name is None or (isinstance(name, str) and name.startswith('+'))) and is_title_placeholder:
-            try:
-                level = getattr(para, 'level', 0)
-                val = _get_master_title_font(host_shape, level)
-                if val:
-                    name = val
-                    name_src = (name_src + ' -> master.titleStyle') if name_src else 'master.titleStyle'
-            except Exception:
-                pass
-        # 规范化字体名称（去除前后空白）；可能为 None（用于后续继承）
+            reason = 'run/paragraph 层均未提供字体名'
+        # 规范化字体名称（去除前后空白）；如果所有方法都无法获取字体名，则设为"未知"
         if isinstance(name, str):
             name = name.strip()
             if name.startswith('+'):
-                # 将主题占位符映射到具体字体（主题优先，内置兜底）；若仍无法映射，则保留占位符原值，供上层归一化
-                mapped = _map_theme_placeholder_to_font(name, theme_fonts)
-                if mapped is not None:
-                    name = mapped
-                    name_src = name_src + ' -> theme_placeholder_map' if name_src else 'theme_placeholder_map'
-        props["字体类型"] = name
+                # 主题占位符不再解析
+                name = "未知"
+                name_src = name_src + ' -> 未知' if name_src else '未知'
+                reason = '主题占位符（+ 前缀）不做解析'
+        elif name is None:
+            # 所有方法都无法获取字体名，设为"未知"
+            name = "未知"
+            name_src = '未知'
+            if reason is None:
+                reason = '未从 run/para 获取到字体名'
+        # 字体族合并（规范别名/派生名）
+        merged = _merge_font_family_alias(name)
+        props["字体类型"] = merged
+
+        # 可选：未知时简单提示（保留最小化日志）
+        try:
+            if merged == "未知":
+                sid = str(getattr(host_shape, "shape_id", ""))
+                snippet = ''
+                try:
+                    snippet = (run.text or '')[:30]
+                except Exception:
+                    snippet = ''
+                print(f"[字体类型=未知] shape_id={sid} 源={name_src} 原因={reason or '无'} 文本片段='{snippet}'")
+        except Exception:
+            pass
         # 字号
         size = getattr(rf, 'size', None) or (getattr(pf, 'size', None) if pf is not None else None)
-        if size is None and placeholder_defaults.get("字号") is not None:
-            props["字号"] = float(placeholder_defaults.get("字号"))
-        else:
-            props["字号"] = float(size.pt) if size is not None else 18.0
+        props["字号"] = float(size.pt) if size is not None else 18.0
         # 颜色
         color = getattr(rf, 'color', None)
         hex_color = _rgb_to_hex(color) if color is not None else None
         if hex_color is None and pf is not None:
             pcolor = getattr(pf, 'color', None)
             hex_color = _rgb_to_hex(pcolor) if pcolor is not None else None
-        if hex_color is None and placeholder_defaults.get("字体颜色") is not None:
-            hex_color = placeholder_defaults.get("字体颜色")
         if hex_color is None:
             hex_color = "#000000"
         props["字体颜色"] = hex_color
@@ -626,30 +396,21 @@ def _resolve_run_font_props(run, para, is_title_placeholder: bool, host_shape) -
         bold = getattr(rf, 'bold', None)
         if bold is None and pf is not None:
             bold = getattr(pf, 'bold', None)
-        if bold is None:
-            bold = placeholder_defaults.get("是否粗体")
         italic = getattr(rf, 'italic', None)
         if italic is None and pf is not None:
             italic = getattr(pf, 'italic', None)
-        if italic is None:
-            italic = placeholder_defaults.get("是否斜体")
         underline = getattr(rf, 'underline', None)
         if underline is None and pf is not None:
             underline = getattr(pf, 'underline', None)
-        if underline is None:
-            underline = placeholder_defaults.get("是否下划线")
         strike = getattr(rf, 'strike', None)
         if strike is None and pf is not None:
             strike = getattr(pf, 'strike', None)
-        if strike is None:
-            strike = placeholder_defaults.get("是否带删除线")
         props.update({
             "是否粗体": _bool_or_default(bold, False),
             "是否斜体": _bool_or_default(italic, False),
             "是否下划线": _bool_or_default(underline, False),
             "是否带删除线": _bool_or_default(strike, False),
         })
-        # 已移除字体调试输出
     except Exception:
         pass
     return props
@@ -658,52 +419,83 @@ def _resolve_run_font_props(run, para, is_title_placeholder: bool, host_shape) -
 def _get_text_block_info(shape, shape_index: int) -> Dict[str, Any]:
     text_info = {}
     try:
+        # 检查是否为组合元素
+        if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+            # 递归处理组合元素中的子形状
+            group_text_info = {}
+            for i, sub_shape in enumerate(shape.shapes):
+                # 使用数字索引，避免字符串拼接问题
+                sub_text_info = _get_text_block_info(sub_shape, shape_index * 100 + i)
+                if sub_text_info:
+                    group_text_info.update(sub_text_info)
+            return group_text_info
+        
+        # 处理普通文本形状
         if shape.has_text_frame and shape.text_frame:
             text_block_position = _get_shape_position(shape)
             is_title_placeholder = _is_title_placeholder(shape)
-            character_attributes = []
-            character_index = 0
-            paragraphs = shape.text_frame.paragraphs
-            total_paras = len(paragraphs)
-            for p_idx, para in enumerate(paragraphs):
-                for run in para.runs:
-                    eff = _resolve_run_font_props(run, para, is_title_placeholder, shape)
-                    for char in run.text:
-                        char_info = {
-                            "字符编号": character_index,
-                            "字符内容": char,
-                            "字体类型": eff.get("字体类型"),
-                            "字号": eff.get("字号"),
-                            "字体颜色": eff.get("字体颜色"),
-                            "是否粗体": eff.get("是否粗体"),
-                            "是否斜体": eff.get("是否斜体"),
-                            "是否下划线": eff.get("是否下划线"),
-                            "是否带删除线": eff.get("是否带删除线"),
-                        }
-                        char_info = {k: v for k, v in char_info.items() if v is not None}
-                        character_attributes.append(char_info)
-                        character_index += 1
-                if p_idx < total_paras - 1:
-                    character_attributes.append({
-                        "字符编号": character_index,
-                        "字符内容": "\n"
-                    })
-                    character_index += 1
-            if character_attributes:
+            
+            # 构建文本块数据（改：输出“段落属性”，不再生成“拼接字符”）
+            text_block_data = {
+                "文本块位置": text_block_position,
+                "图层编号": shape_index,
+                "是否是标题占位符": is_title_placeholder,
+                "文本块索引": str(getattr(shape, "shape_id", "")),
+                "段落属性": []
+            }
+            
+            # 获取文本框架中的段落和运行
+            text_frame = shape.text_frame
+            for para_index, paragraph in enumerate(text_frame.paragraphs):
+                # 处理段落中的每个运行（run）
+                for run_index, run in enumerate(paragraph.runs):
+                    # 获取运行的字体属性
+                    font_props = _resolve_run_font_props(run, paragraph, is_title_placeholder, shape)
+                    
+                    # 构建 run 级属性对象（段落属性项）
+                    char_attr = {
+                        "段落编号": para_index,
+                        "字体类型": font_props.get("字体类型", "未知"),
+                        "字号": font_props.get("字号", 18.0),
+                        # 颜色改为中文常见色名
+                        "字体颜色": _hex_to_cn_color_name(font_props.get("字体颜色", "#000000")),
+                        "是否粗体": font_props.get("是否粗体", False),
+                        # "是否斜体": font_props.get("是否斜体", False),
+                        # "是否下划线": font_props.get("是否下划线", False),
+                        # "是否带删除线": font_props.get("是否带删除线", False),
+                        "段落内容": run.text
+                    }
+
+                    # JSON层面合并：若与前一条在样式上完全一致（仅段落内容不同），则合并段落内容
+                    if text_block_data["段落属性"]:
+                        last = text_block_data["段落属性"][-1]
+                        same_style = all(last.get(k) == char_attr.get(k) for k in ATTR_COMPARE_KEYS)
+                        same_para = last.get("段落编号") == char_attr.get("段落编号")
+                        if same_style and same_para:
+                            last["段落内容"] = f"{last.get('段落内容','')}{char_attr.get('段落内容','')}"
+                        else:
+                            text_block_data["段落属性"].append(char_attr)
+                    else:
+                        text_block_data["段落属性"].append(char_attr)
+
+            # 检查是否有有效的段落内容
+            has_content = False
+            for char_attr in text_block_data["段落属性"]:
+                if char_attr.get("段落内容", "").strip():
+                    has_content = True
+                    break
+            
+            # 只有当有内容时才输出文本块
+            if has_content:
                 text_key = f"文本块{shape_index + 1}"
+                sid = str(getattr(shape, "shape_id", ""))
                 text_payload = {
                     "文本块位置": text_block_position,
                     "图层编号": shape_index,
                     "是否是标题占位符": is_title_placeholder,
-                    "字符属性": character_attributes
+                    "文本块索引": sid,
+                    "段落属性": text_block_data["段落属性"]
                 }
-                # 生成拼接字符
-                try:
-                    text_payload["拼接字符"] = serialize_text_block_to_diff_string({text_key: text_payload}, initial_label="初始的字符所有属性")
-                except Exception:
-                    text_payload["拼接字符"] = ""
-                # 输出时不包含“字符属性”明细，仅保留拼接字符等元信息
-                text_payload.pop("字符属性", None)
                 text_info = {text_key: text_payload}
     except Exception as e:
         print(f"提取文本块信息失败: {e}")
@@ -729,12 +521,15 @@ def _get_image_info(shape, shape_index: int) -> Dict[str, Any]:
                     image_size = len(shape.image.blob) if hasattr(shape.image, 'blob') else 0
             except Exception:
                 pass
+            # 提取 shape_id 作为图片索引（便于与原始PPT形状对应）
+            sid = str(getattr(shape, "shape_id", ""))
             image_info = {
                 f"图片{shape_index + 1}": {
                     "图片位置": position,
                     "图片类型": image_type,
                     "图片大小": f"{image_size} bytes",
-                    "图层位置": shape_index
+                    "图层位置": shape_index,
+                    "图片索引": sid
                 }
             }
     except Exception as e:
@@ -742,19 +537,28 @@ def _get_image_info(shape, shape_index: int) -> Dict[str, Any]:
     return image_info
 
 
-def parse_pptx(path: str, include_images: bool = False) -> List[Dict[str, Any]]:
+def parse_pptx(path: str, include_images: bool = False) -> Dict[str, Any]:
     try:
         prs = Presentation(path)
-        slides_data: List[Dict[str, Any]] = []
+        total_slides = len(prs.slides)
+        
+        # 按照新结构组织数据
+        result = {
+            "页数": total_slides,
+            "contents": []
+        }
+        
         for slide_index, slide in enumerate(prs.slides):
-            page_map: Dict[str, Any] = {}
-            # 为每页添加 1-based 页码
-            page_map["页码"] = slide_index + 1
-            # 按 example_parsing_data.json 格式组织：文本块数组 + 图片数组
+            page_data = {
+                "页码": slide_index + 1,
+                "文本块数量": 0,
+                "文本块": [],
+                "图片数量": 0,
+                "图片": []
+            }
+            
+            # 处理文本块（包括组合元素中的文本）
             text_blocks: List[Dict[str, Any]] = []
-            images: List[Dict[str, Any]] = []
-            # 注意：保持 PowerPoint 原始形状顺序，即形状树中的叠放层级顺序（从底到顶）
-            # 计划对应：修正"图层编号"含义为上下覆盖关系，而非几何位置排序
             for shape_index, shape in enumerate(slide.shapes):
                 text_info = _get_text_block_info(shape, shape_index)
                 if text_info:
@@ -762,21 +566,30 @@ def parse_pptx(path: str, include_images: bool = False) -> List[Dict[str, Any]]:
                     for key, payload in text_info.items():
                         if key.startswith("文本块"):
                             text_blocks.append(payload)
-                if include_images:
+            
+            page_data["文本块数量"] = len(text_blocks)
+            page_data["文本块"] = text_blocks
+            
+            # 处理图片
+            if include_images:
+                images: List[Dict[str, Any]] = []
+                for shape_index, shape in enumerate(slide.shapes):
                     image_info = _get_image_info(shape, shape_index)
                     if image_info:
                         # 提取图片内容到数组
                         for key, payload in image_info.items():
                             if key.startswith("图片"):
                                 images.append(payload)
-            # 按格式要求组装页面数据
-            page_map["文本块"] = text_blocks
-            page_map["图片"] = images
-            slides_data.append(page_map)
-        return slides_data
+                
+                page_data["图片数量"] = len(images)
+                page_data["图片"] = images
+            
+            result["contents"].append(page_data)
+        
+        return result
     except Exception as e:
         print(f"解析PPTX文件失败: {e}")
-        return []
+        return {"页数": 0, "contents": []}
 
 
 def save_to_json(data: List[Dict[str, Any]], output_path: str):
@@ -800,19 +613,17 @@ if __name__ == "__main__":
     print("🧪 测试PPTX解析...")
     # 依据新增参数 include_images 控制图片信息输出
     result = parse_pptx(pptx_path, include_images=args.include_images)
-    if result:
-        print(f"✅ 成功解析，共 {len(result)} 页")
-        save_to_json(result, "parsing_result_new.json")
-        for i in range(len(result[:5])):
-            print(f"第 {i+1} 页:")
-            page = result[i]
-            print(f"页码: {page.get('页码')}")
-            print(f"文本块数量: {len(page.get('文本块', []))}")
-            print(f"图片数量: {len(page.get('图片', []))}")
-            # 显示前几个文本块的关键信息
-            for j, text_block in enumerate(page.get('文本块', [])[:3]):
-                print(f"  文本块{j+1}: 位置={text_block.get('文本块位置', {})}, 标题占位符={text_block.get('是否是标题占位符')}")
-            print()
+    if result and "contents" in result:
+        print(f"✅ 成功解析，共 {result['页数']} 页")
+        save_to_json(result, "parsing_result.json")
+        
+        # # 显示前几页的关键信息
+        # for i, page in enumerate(result['contents'][:5]):
+        #     print(f"\n第 {page['页码']} 页:")
+            
+        #     # 显示前几个文本块的关键信息
+        #     for j, text_block in enumerate(page.get('文本块', [])):  # 只显示前3个文本块
+        #         print(text_block)
     else:
         print("❌ 解析失败")
 

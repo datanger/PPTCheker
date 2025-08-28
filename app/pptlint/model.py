@@ -5,7 +5,7 @@
 - 提供解析层与规则引擎之间的稳定数据结构。
 """
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 
 @dataclass
@@ -78,4 +78,58 @@ class Issue:
     suggestion: Optional[str] = None
     can_autofix: bool = False
     fixed: bool = False
+
+
+# 新增：PPT编辑相关模型
+@dataclass
+class EditSuggestion:
+    """编辑建议实体"""
+    type: str  # text_change, font_change, color_change, layout_change
+    page_number: int
+    shape_index: int
+    current_value: str
+    new_value: str
+    reason: str
+    priority: str = "medium"  # high, medium, low
+    can_auto_apply: bool = True
+
+
+@dataclass
+class PPTContext:
+    """PPT编辑上下文，包含所有必要信息"""
+    parsing_result: Dict[str, Any]           # 解析结果
+    original_pptx_path: str                  # 原始PPT文件路径
+    presentation_object: Optional[Any] = None  # python-pptx对象
+    slide_layouts: List[Any] = field(default_factory=list)  # 幻灯片布局
+    slide_masters: List[Any] = field(default_factory=list)  # 母版信息
+    theme_info: Dict[str, Any] = field(default_factory=dict)  # 主题信息
+    
+    def get_editable_slide(self, page_number: int):
+        """获取可编辑的幻灯片对象"""
+        if self.presentation_object and 1 <= page_number <= len(self.presentation_object.slides):
+            return self.presentation_object.slides[page_number - 1]
+        return None
+    
+    def get_slide_layout(self, layout_index: int):
+        """获取幻灯片布局"""
+        if 0 <= layout_index < len(self.slide_layouts):
+            return self.slide_layouts[layout_index]
+        return None
+    
+    def get_slide_master(self, master_index: int):
+        """获取幻灯片母版"""
+        if 0 <= master_index < len(self.slide_masters):
+            return self.slide_masters[master_index]
+        return None
+
+
+@dataclass
+class EditResult:
+    """编辑结果"""
+    success: bool
+    modified_slides: List[int] = field(default_factory=list)
+    applied_suggestions: List[EditSuggestion] = field(default_factory=list)
+    failed_suggestions: List[EditSuggestion] = field(default_factory=list)
+    error_messages: List[str] = field(default_factory=list)
+    output_path: Optional[str] = None
 

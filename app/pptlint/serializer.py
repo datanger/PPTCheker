@@ -94,7 +94,7 @@ def _normalize_value(key: str, value: Any) -> Any:
             return "楷体"
         if raw in {"timesnewroman", "timenewroman", "timesnewromanpsmt"} or value.strip() in {"Times New Roman", "TimeNew Roman", "timenew roman"}:
             return "timenew roman"
-        # 若为主题占位符（+mn-ea/+mj-lt 等），归为“其他”（保持不猜测）
+        # 若为主题占位符（+mn-ea/+mj-lt 等），归为"其他"（保持不猜测）
         if raw.startswith('+'):
             return "其他"
         return "其他"
@@ -153,85 +153,92 @@ def _most_frequent_non_unknown(values: List[Any]) -> Optional[Any]:
     return best
 
 
-def _build_initial_attrs(chars: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """以首个可见字符作为初始属性基线。"""
-    if not chars:
+def _build_initial_attrs(runs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """以首个非空 run 作为初始属性基线（按 run 维度）。"""
+    if not runs:
         return {k: None for k in ATTR_KEYS}
-    first = next((c for c in chars if c.get("字符内容") != "\n"), None)
+    first = next((r for r in runs if str(r.get("字符内容", "")).strip() != ""), None)
     if first is None:
         return {k: None for k in ATTR_KEYS}
     return {k: first.get(k) for k in ATTR_KEYS}
 
 
+def _emit_text_with_newline_markers(text: str) -> str:
+    """将 run 文本中的换行与缩进标记化，同时原样保留其它文本。"""
+    if not text:
+        return ""
+    parts: List[str] = []
+    lines = text.split("\n")
+    for idx, line in enumerate(lines):
+        if idx > 0:
+            parts.append("【换行】")
+            # 统计换行后开头空格数以作为缩进
+            indent = 0
+            for ch in line:
+                if ch == ' ':
+                    indent += 1
+                else:
+                    break
+            if indent > 0:
+                parts.append(f"【缩进{{{indent}}}】")
+        parts.append(line)
+    return "".join(parts)
+
+
 def serialize_text_block_to_diff_string(text_block: Dict[str, Any], initial_label: str = "初始的字符所有属性") -> str:
-    text_info = next(iter(text_block.values()))
-    chars: List[Dict[str, Any]] = text_info.get("字符属性", [])
-    if not chars:
+    """按 run 维度进行序列化：
+    - 初次输出完整属性【初始的字符所有属性】
+    - 当某个 run 的属性相对初始有变化时，输出【字符属性变更：...】（仅列变更项）
+    - 文本输出以 run 为单位，run 内部的换行用【换行】与【缩进{N}】标记
+    """
+    # 取出 runs（原“字符属性”数组，将其视为 run 列表）
+    if "字符属性" in text_block:
+        runs = text_block["字符属性"]
+    else:
+        text_info = next(iter(text_block.values()))
+        runs = text_info.get("字符属性", [])
+
+    # 预合并：若相邻 run 的属性（除字符内容外）完全一致，则合并为一个 run
+    def _norm_run_attrs(r: Dict[str, Any]) -> Dict[str, Any]:
+        return {k: _normalize_value(k, r.get(k)) for k in ATTR_KEYS}
+
+    merged_runs: List[Dict[str, Any]] = []
+    for r in runs:
+        if not merged_runs:
+            merged_runs.append(dict(r))
+            continue
+        last = merged_runs[-1]
+        if _norm_run_attrs(last) == _norm_run_attrs(r):
+            # 合并文本内容
+            last_text = str(last.get("字符内容", ""))
+            curr_text = str(r.get("字符内容", ""))
+            last["字符内容"] = f"{last_text}{curr_text}"
+        else:
+            merged_runs.append(dict(r))
+
+    runs = merged_runs
+
+    if not runs:
         return _make_initial_marker({k: None for k in ATTR_KEYS}, initial_label)
 
     output_parts: List[str] = []
-    # 计算初始属性，并标准化用于后续比较
-    initial_attrs_raw = _build_initial_attrs(chars)
+    # 初始属性来自首个非空 run
+    initial_attrs_raw = _build_initial_attrs(runs)
     initial_attrs = {k: _normalize_value(k, initial_attrs_raw.get(k)) for k in ATTR_KEYS}
-    prev_attrs: Dict[str, Any] = {}
-    at_baseline: bool = True  # 是否处于“与初始属性一致”的状态
-    buf: List[str] = []
+    output_parts.append(_make_initial_marker(initial_attrs, initial_label))
 
-    i = 0
-    while i < len(chars):
-        ch = chars[i]
-        char_text = ch.get("字符内容", "")
-
-        if char_text == "\n":
-            if buf:
-                output_parts.append("".join(buf))
-                buf = []
-            output_parts.append("【换行】")
-            j = i + 1
-            indent_count = 0
-            while j < len(chars) and chars[j].get("字符内容", "") == " ":
-                indent_count += 1
-                j += 1
-            if indent_count > 0:
-                output_parts.append(f"【缩进{{{indent_count}}}】")
-            i = j
-            continue
-
-        curr_attrs_raw = _attrs_from_char(ch, prev_attrs)
+    # 遍历每个 run，若属性与初始不同则输出变更标记，然后输出该 run 文本（含换行标记）
+    for run in runs:
+        run_text = str(run.get("字符内容", ""))
+        curr_attrs_raw = {k: run.get(k) for k in ATTR_KEYS}
         curr_attrs = {k: _normalize_value(k, curr_attrs_raw.get(k)) for k in ATTR_KEYS}
 
-        if prev_attrs == {}:
-            output_parts.append(_make_initial_marker(initial_attrs, initial_label))
-            prev_attrs = curr_attrs
-            # 基于与初始属性的比较，更新基线状态
-            at_baseline = all(curr_attrs.get(k) == initial_attrs.get(k) for k in ATTR_KEYS)
-            # 若一开始就偏离初始属性，则输出一次相对初始的变更说明
-            if not at_baseline:
-                if buf:
-                    output_parts.append("".join(buf))
-                    buf = []
-                marker = _make_changed_attrs_marker(initial_attrs, curr_attrs)
-                if marker:
-                    output_parts.append(marker)
-            buf.append(char_text)
-        else:
-            # 仅当“相对初始属性发生偏离，且此前处于基线状态”时输出变更说明
-            is_baseline_now = all(curr_attrs.get(k) == initial_attrs.get(k) for k in ATTR_KEYS)
-            if at_baseline and (not is_baseline_now):
-                if buf:
-                    output_parts.append("".join(buf))
-                    buf = []
-                marker = _make_changed_attrs_marker(initial_attrs, curr_attrs)
-                if marker:
-                    output_parts.append(marker)
-            # 更新基线状态与上一属性快照
-            at_baseline = is_baseline_now
-            prev_attrs = curr_attrs
-            buf.append(char_text)
-        i += 1
+        marker = _make_changed_attrs_marker(initial_attrs, curr_attrs)
+        if marker:
+            output_parts.append(marker)
 
-    if buf:
-        output_parts.append("".join(buf))
+        if run_text:
+            output_parts.append(_emit_text_with_newline_markers(run_text))
 
     return "".join(output_parts)
 

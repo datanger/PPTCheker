@@ -33,12 +33,7 @@ class LLMClient:
         # 优先使用 DEEPSEEK_API_KEY，其次使用 LLM_API_KEY
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
 
-    def is_enabled(self) -> bool:
-        return bool(self.endpoint and self.api_key)
-
     def complete(self, prompt: str, max_tokens: int = 512) -> str:
-        if not self.is_enabled():
-            return ""
         try:
             req = urllib.request.Request(self.endpoint, method="POST")
             req.add_header("Content-Type", "application/json")

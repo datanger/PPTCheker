@@ -6,8 +6,16 @@ import re
 from collections import defaultdict
 from typing import List
 
-from .model import DocumentModel, Issue, Color
-from .config import ToolConfig
+try:
+    from ..model import DocumentModel, Issue, Color
+    from ..config import ToolConfig
+except ImportError:
+    # 兼容直接运行的情况
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from model import DocumentModel, Issue, Color
+    from config import ToolConfig
 
 
 def _is_color_equal(c1: Color, c2: Color, tol: int = 10) -> bool:

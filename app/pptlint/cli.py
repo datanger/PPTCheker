@@ -10,62 +10,67 @@ from .config import load_config, ToolConfig
 from .reporter import render_markdown
 
 
-def _collect_files(input_path: str) -> List[str]:
-    if os.path.isdir(input_path):
-        out = []
-        for root, _dirs, files in os.walk(input_path):
-            for f in files:
-                if f.lower().endswith(".pptx"):
-                    out.append(os.path.join(root, f))
-        return out
-    return [input_path]
-
-
 def main():
-    parser = argparse.ArgumentParser(description="PPT 格式审查工具")
-    parser.add_argument("--input", required=True, help="PPTX 文件或目录")
-    parser.add_argument("--config", required=True, help="配置文件 YAML")
-    parser.add_argument("--user-req", required=False, help="用户审查需求文档（Markdown/YAML）")
-    parser.add_argument("--mode", required=False, choices=["review", "edit"], default="review", help="运行模式")
-    parser.add_argument("--llm", required=False, choices=["on", "off"], default="on", help="是否启用LLM（默认on）")
-    parser.add_argument("--report", required=False, help="输出报告路径（.md，可选）")
-    parser.add_argument("--output-ppt", required=False, help="输出PPT路径（标记或改写版 .pptx）")
-    args = parser.parse_args()
+	parser = argparse.ArgumentParser(description="PPT 工具工作流（以 parsing_result.json 为输入）")
+	parser.add_argument("--parsing", required=True, help="解析结果文件 parsing_result.json 路径")
+	parser.add_argument("--config", required=True, help="配置文件 YAML")
+	parser.add_argument("--mode", required=False, choices=["review", "edit"], default="review", help="运行模式：审查/编辑")
+	parser.add_argument("--llm", required=False, choices=["on", "off"], default="on", help="是否启用LLM（默认on）")
+	parser.add_argument("--report", required=False, help="输出报告路径（.md，可选）")
+	parser.add_argument("--output-ppt", required=False, help="输出PPT路径（标记或改写版 .pptx）")
+	# 编辑模式专用
+	parser.add_argument("--original-pptx", required=False, help="编辑模式：原始PPTX文件路径")
+	parser.add_argument("--edit-req", required=False, default="请分析PPT内容，提供改进建议", help="编辑模式：编辑要求提示语")
+	args = parser.parse_args()
 
-    cfg: ToolConfig = load_config(args.config)
-    # 用户审查需求解析
-    if args.user_req:
-        from .user_req import parse_user_requirements
-        cfg = parse_user_requirements(args.user_req, cfg)
+	cfg: ToolConfig = load_config(args.config)
 
-    # LLM 客户端
-    from .llm import LLMClient
-    llm = LLMClient() if args.llm == "on" else None
+	# LLM 客户端
+	from .llm import LLMClient
+	llm = LLMClient() if args.llm == "on" else None
 
-    files = _collect_files(args.input)
-    from .workflow import run_review_workflow, run_edit_workflow
-    issues_all = []
-    for fp in files:
-        try:
-            if args.mode == "review":
-                res = run_review_workflow(fp, cfg, args.output_ppt if len(files) == 1 else None, llm)
-            else:
-                # 编辑模式需要输出目标
-                out_ppt = args.output_ppt if len(files) == 1 else None
-                res = run_edit_workflow(fp, cfg, out_ppt, llm)
-            issues_all.extend(res.issues)
-            print(f"[green]✓[/green] 已处理: {fp}，发现问题 {len(res.issues)}")
-        except Exception as e:
-            print(f"[red]✗[/red] 失败: {fp}: {e}")
+	from .workflow import run_review_workflow, run_edit_workflow
 
-    if args.report:
-        content = render_markdown(issues_all)
-        os.makedirs(os.path.dirname(args.report), exist_ok=True)
-        with open(args.report, "w", encoding="utf-8") as f:
-            f.write(content)
-        print(f"[cyan]报告已生成[/cyan]: {args.report}")
+	# 参数校验
+	if not os.path.exists(args.parsing):
+		print(f"[red]✗[/red] parsing_result.json 不存在: {args.parsing}")
+		return
+
+	if args.mode == "edit":
+		if not args.original_pptx or not os.path.exists(args.original_pptx):
+			print("[red]✗[/red] 编辑模式需要提供有效的 --original-pptx")
+			return
+		if not args.output_ppt:
+			print("[yellow]![/yellow] 未提供 --output-ppt，默认输出为 edited_output.pptx")
+			args.output_ppt = "edited_output.pptx"
+
+	# 执行
+	try:
+		if args.mode == "review":
+			res = run_review_workflow(args.parsing, cfg, args.output_ppt, llm)
+			print(f"[green]✓[/green] 审查完成。问题数：{len(res.issues)}")
+		else:
+			res = run_edit_workflow(
+				parsing_result_path=args.parsing,
+				original_pptx_path=args.original_pptx,
+				cfg=cfg,
+				output_ppt=args.output_ppt,
+				llm=llm,
+				edit_requirements=args.edit_req if hasattr(args, 'edit_req') else args.edit_req
+			)
+			print("[green]✓[/green] 编辑流程完成。")
+
+		# 输出报告
+		if args.report:
+			content = res.report_md if getattr(res, "report_md", None) else render_markdown(res.issues)
+			os.makedirs(os.path.dirname(args.report) or ".", exist_ok=True)
+			with open(args.report, "w", encoding="utf-8") as f:
+				f.write(content)
+			print(f"[cyan]报告已生成[/cyan]: {args.report}")
+	except Exception as e:
+		print(f"[red]✗[/red] 运行失败: {e}")
 
 
 if __name__ == "__main__":
-    main()
+	main()
 

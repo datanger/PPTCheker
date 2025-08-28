@@ -1,18 +1,31 @@
 """
 工作流编排器：根据《审查需求文档》与配置，动态串联组件。
 支持规则+LLM混合审查模式，LLM不可用时自动降级为纯规则。
+
+输入：parsing_result.json 格式的数据
+输出：审查结果、报告、标记PPT等
 """
 from typing import List, Optional
 
 from .config import ToolConfig
-from .parser import parse_pptx
-from .rules import run_basic_rules
-from .reporter import render_markdown
-from .annotator import annotate_pptx
 from .model import Issue
 from .llm import LLMClient
-from .llm_review import create_llm_reviewer
-
+from .tools.workflow_tools import (
+    load_parsing_result,
+    generate_report,
+    generate_annotated_ppt,
+    get_workflow_statistics,
+    # 新增：PPT编辑功能
+    create_ppt_context,
+    run_llm_edit_analysis,
+    apply_edits_to_ppt,
+    save_modified_ppt,
+    # 新增：规则检查
+    convert_parsing_result_to_document_model,
+    run_basic_rules
+)
+from .tools.llm_review import create_llm_reviewer
+from .tools.structure_parsing import analyze_from_parsing_result
 
 class WorkflowResult:
     def __init__(self):
@@ -22,44 +35,55 @@ class WorkflowResult:
         self.llm_issues_count: int = 0
 
 
-def run_review_workflow(file_path: str, cfg: ToolConfig, output_ppt: Optional[str], llm: Optional[LLMClient]) -> WorkflowResult:
+def run_review_workflow(parsing_result_path: str, cfg: ToolConfig, output_ppt: Optional[str], llm: Optional[LLMClient], original_pptx_path: Optional[str] = None) -> WorkflowResult:
     res = WorkflowResult()
     
-    # 步骤1：解析PPT
-    print("📖 解析PPT文件...")
-    doc = parse_pptx(file_path)
+    # 步骤1：加载 parsing_result.json
+    print("📖 加载解析结果...")
+    parsing_data = load_parsing_result(parsing_result_path)
+    if not parsing_data or parsing_data.get("页数", 0) == 0:
+        print("❌ 加载解析结果失败或数据为空")
+        return res
     
-    # 步骤2：规则检查（基础格式检查）
-    print("🔍 执行规则检查...")
-    rule_issues = run_basic_rules(doc, cfg)
-    res.rule_issues_count = len(rule_issues)
-    print(f"✅ 规则检查完成，发现 {len(rule_issues)} 个问题")
+    # 步骤2：分析PPT结构
+    print("🔍 分析PPT结构...")
+    # parsing_data = analyze_from_parsing_result(parsing_data)
     
-    # 步骤3：LLM智能审查（如果可用）
-    llm_issues = []
-    if llm and llm.is_enabled():
-        try:
-            llm_reviewer = create_llm_reviewer(llm, cfg)
-            llm_issues = llm_reviewer.run_llm_review(doc)
-            res.llm_issues_count = len(llm_issues)
-        except Exception as e:
-            print(f"⚠️ LLM审查失败，降级为纯规则模式: {e}")
-            llm_issues = []
-    else:
-        print("ℹ️ LLM未配置，使用纯规则审查模式")
+    # 步骤3：规则检查
+    print("📋 运行规则检查...")
+    rule_issues = []
+    try:
+        doc_model = convert_parsing_result_to_document_model(parsing_data, parsing_result_path)
+        rule_issues = run_basic_rules(doc_model, cfg)
+        print(f"✅ 规则检查完成，发现 {len(rule_issues)} 个问题")
+    except Exception as e:
+        print(f"⚠️ 规则检查失败：{e}")
     
-    # 步骤4：合并所有问题
+    # 步骤4：LLM审查（抽取为公共函数）
+    print("🤖 运行LLM审查...")
+    llm_issues = _perform_llm_review(parsing_data, cfg, llm)
+    
+    # 合并所有问题
     all_issues = rule_issues + llm_issues
     res.issues = all_issues
+    res.rule_issues_count = len(rule_issues)
+    res.llm_issues_count = len(llm_issues)
     
     # 步骤5：生成报告
     print("📊 生成审查报告...")
-    res.report_md = render_markdown(all_issues)
+    res.report_md = generate_report(all_issues)
     
     # 步骤6：输出标记PPT（如果指定）
     if output_ppt:
-        print("🏷️ 生成标记PPT...")
-        annotate_pptx(file_path, all_issues, output_ppt)
+        if not original_pptx_path:
+            print("⚠️ 无法生成标记PPT：需要提供原始PPTX文件路径")
+        else:
+            print("🏷️ 生成标记PPT...")
+            success = generate_annotated_ppt(original_pptx_path, all_issues, output_ppt)
+            if success:
+                print(f"✅ 标记PPT已生成: {output_ppt}")
+            else:
+                print("❌ 生成标记PPT失败")
     
     # 步骤7：输出统计信息
     print(f"\n🎯 审查完成！")
@@ -70,9 +94,143 @@ def run_review_workflow(file_path: str, cfg: ToolConfig, output_ppt: Optional[st
     return res
 
 
-def run_edit_workflow(file_path: str, cfg: ToolConfig, output_ppt: str, llm: Optional[LLMClient]) -> WorkflowResult:
-    """编辑模式：当前与审查模式相同，为未来自动修复预留接口"""
-    print("✏️ 编辑模式：当前仅标记问题，自动修复功能待实现")
-    return run_review_workflow(file_path, cfg, output_ppt, llm)
+def _perform_llm_review(parsing_data, cfg: ToolConfig, llm: Optional[LLMClient]) -> List[Issue]:
+    """公共：基于 parsing_result.json 调用LLM进行多维度审查并返回问题列表。"""
+    issues: List[Issue] = []
+    
+    # 如果LLM客户端未提供，自动创建一个
+    if not llm:
+        print("🤖 自动创建LLM客户端...")
+        from .llm import LLMClient
+        llm = LLMClient()
+    
+    try:
+        print("🤖 创建LLM审查器...")
+        reviewer = create_llm_reviewer(llm, cfg)
+        print("🤖 开始格式标准审查...")
+        fmt = reviewer.review_format_standards(parsing_data)
+        print("🤖 开始内容逻辑审查...")
+        logic = reviewer.review_content_logic(parsing_data)
+        print("🤖 开始缩略语审查...")
+        acr = reviewer.review_acronyms(parsing_data)
+        print("🤖 开始标题结构审查...")
+        title = reviewer.review_title_structure(parsing_data)
+        issues = (fmt or []) + (logic or []) + (acr or []) + (title or [])
+    except Exception as e:
+        print(f"⚠️ LLM审查失败：{e}")
+    return issues
+
+def run_edit_workflow(
+    parsing_result_path: str, 
+    original_pptx_path: str, 
+    cfg: ToolConfig, 
+    output_ppt: str, 
+    llm: Optional[LLMClient] = None,
+    edit_requirements: str = "请分析PPT内容，提供改进建议"
+) -> WorkflowResult:
+    """编辑模式：使用LLM分析并自动修改PPT"""
+    res = WorkflowResult()
+    
+    print("✏️ 启动PPT编辑模式...")
+    
+    # 步骤1：加载 parsing_result.json
+    print("📖 加载解析结果...")
+    parsing_data = load_parsing_result(parsing_result_path)
+    if not parsing_data or parsing_data.get("页数", 0) == 0:
+        print("❌ 加载解析结果失败或数据为空")
+        return res
+    
+    # 步骤2：创建PPT编辑上下文
+    print("🔄 创建PPT编辑上下文...")
+    ppt_context = create_ppt_context(parsing_data, original_pptx_path)
+    if not ppt_context:
+        print("❌ 创建PPT编辑上下文失败")
+        return res
+    
+    # 步骤3：依赖审查结果（与审查模式共用的LLM审查逻辑）
+    print("🤖 运行审查以支持编辑...")
+    review_issues = _perform_llm_review(parsing_data, cfg, llm)
+    res.issues = review_issues
+    
+    # 步骤4：使用LLM分析并生成编辑建议
+    print("🤖 使用LLM分析PPT内容...")
+    # 如果LLM客户端未提供，自动创建一个
+    if not llm:
+        print("🤖 自动创建LLM客户端...")
+        from .llm import LLMClient
+        llm = LLMClient()
+    edit_suggestions = run_llm_edit_analysis(parsing_data, llm, edit_requirements)
+    
+    if edit_suggestions:
+        print(f"✅ LLM生成 {len(edit_suggestions)} 个编辑建议")
+        
+        # 步骤5：应用编辑建议到PPT
+        print("🔧 应用编辑建议...")
+        edit_result = apply_edits_to_ppt(ppt_context, edit_suggestions)
+        
+        if edit_result.success:
+            # 步骤6：保存修改后的PPT
+            print("💾 保存修改后的PPT...")
+            if save_modified_ppt(ppt_context, output_ppt):
+                print(f"✅ 编辑完成！修改后的PPT已保存到: {output_ppt}")
+                
+                # 生成编辑报告
+                res.report_md = generate_edit_report(edit_result, edit_suggestions)
+                res.rule_issues_count = len(edit_result.failed_suggestions)
+                res.llm_issues_count = len(edit_result.applied_suggestions)
+                
+                # 输出统计信息
+                print(f"\n🎯 编辑完成！")
+                print(f"   - 成功应用：{len(edit_result.applied_suggestions)} 个建议")
+                print(f"   - 失败建议：{len(edit_result.failed_suggestions)} 个")
+                print(f"   - 修改页面：{edit_result.modified_slides}")
+                
+                if edit_result.error_messages:
+                    print(f"   - 错误信息：{edit_result.error_messages}")
+            else:
+                print("❌ 保存修改后的PPT失败")
+        else:
+            print("❌ 应用编辑建议失败")
+    else:
+        print("ℹ️ LLM未生成编辑建议")
+    
+    return res
+
+
+def generate_edit_report(edit_result, edit_suggestions: List) -> str:
+    """生成编辑报告"""
+    report = "# PPT编辑报告\n\n"
+    
+    if edit_result.success:
+        report += f"## ✅ 编辑成功\n\n"
+        report += f"- 成功应用：{len(edit_result.applied_suggestions)} 个建议\n"
+        report += f"- 修改页面：{edit_result.modified_slides}\n"
+        report += f"- 输出文件：{edit_result.output_path}\n\n"
+        
+        if edit_result.applied_suggestions:
+            report += "## 📝 已应用的编辑\n\n"
+            for suggestion in edit_result.applied_suggestions:
+                report += f"### 页面 {suggestion.page_number} - 形状 {suggestion.shape_index}\n"
+                report += f"- 类型：{suggestion.type}\n"
+                report += f"- 当前值：{suggestion.current_value}\n"
+                report += f"- 新值：{suggestion.new_value}\n"
+                report += f"- 原因：{suggestion.reason}\n"
+                report += f"- 优先级：{suggestion.priority}\n\n"
+    else:
+        report += "## ❌ 编辑失败\n\n"
+    
+    if edit_result.failed_suggestions:
+        report += "## ⚠️ 失败的编辑\n\n"
+        for suggestion in edit_result.failed_suggestions:
+            report += f"### 页面 {suggestion.page_number} - 形状 {suggestion.shape_index}\n"
+            report += f"- 类型：{suggestion.type}\n"
+            report += f"- 原因：{suggestion.reason}\n\n"
+    
+    if edit_result.error_messages:
+        report += "## 🚨 错误信息\n\n"
+        for error in edit_result.error_messages:
+            report += f"- {error}\n\n"
+    
+    return report
 
 
