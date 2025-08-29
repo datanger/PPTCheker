@@ -122,7 +122,7 @@ app/
 ### 基础配置 (configs/config.yaml)
 ```yaml
 # 字体设置
-jp_font_name: "Meiyou UI"    # 日文字体标准
+jp_font_name: "Meiryo UI"    # 日文字体标准
 min_font_size_pt: 12         # 最小字号阈值
 
 # 缩略语设置

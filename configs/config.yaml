@@ -1,18 +1,49 @@
-jp_font_name: "Meiyou UI"
-min_font_size_pt: 12
+# PPT审查工具配置文件
 
-acronym_min_len: 2
-acronym_max_len: 8
+# 字体配置
+jp_font_name: "Meiryo UI"  # 日文字体统一
+min_font_size_pt: 12        # 最小字号（磅）
 
-color_count_threshold: 5
+# 颜色配置
+color_count_threshold: 5    # 颜色数量阈值
 
-output_format: "md"
+# 输出格式
+output_format: "md"         # 报告格式：md | html
 
-autofix_font: false
-autofix_size: false
-autofix_color: false
+# 自动修复开关
+autofix_font: false         # 是否自动修复字体
+autofix_size: false         # 是否自动修复字号
+autofix_color: false        # 是否自动修复颜色
 
-# 可选词库路径示例
-# jp_terms_path: "dicts/jp_it_terms.txt"
-# term_mapping_path: "dicts/term_mapping.csv"
+# 词库路径（可选）
+jp_terms_path: "dicts/jp_it_terms.txt"      # 日语IT术语词典
+term_mapping_path: "dicts/term_mapping.csv"  # 术语映射表
+
+# LLM配置（默认启用）
+llm_enabled: true             # 是否启用LLM审查
+llm_model: "deepseek-chat"    # 默认使用 DeepSeek 模型
+llm_temperature: 0.2          # 温度参数（越低越确定）
+llm_max_tokens: 99999         # 最大token数
+
+# 审查维度开关
+llm_review:
+  review_format: true           # 格式规范审查
+  review_logic: true            # 内容逻辑审查
+  review_acronyms: true          # 缩略语审查
+  review_fluency: true           # 表达流畅性审查
+
+# 审查规则配置
+rules_review:
+  font_family: true           # 启用字体族检查
+  font_size: true             # 启用字号检查
+  color_count: true           # 启用颜色数量检查
+  theme_harmony: true         # 启用主题一致性检查
+  acronym_explanation: true   # 启用缩略语解释检查
+
+# 报告配置
+report:
+  include_summary: true       # 包含问题汇总
+  include_details: true       # 包含详细问题
+  include_suggestions: true   # 包含改进建议
+  include_statistics: true    # 包含统计信息
 

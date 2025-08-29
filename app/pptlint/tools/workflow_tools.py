@@ -69,11 +69,11 @@ def convert_parsing_result_to_document_model(parsing_data: Dict[str, Any], file_
                 border_color=None
             )
             
-            # 直接从“段落属性”构建 TextRun
+            # 直接从"段落属性"构建 TextRun
             para_runs = text_block.get("段落属性", [])
             for r in para_runs:
                 tr = TextRun(
-                    text=str(r.get("字符内容", "")),
+                    text=str(r.get("段落内容", "")),
                     font_name=r.get("字体类型"),
                     font_size_pt=float(r.get("字号")) if r.get("字号") is not None else None,
                     language_tag="ja",
@@ -152,13 +152,103 @@ def run_llm_review(doc: DocumentModel, llm: LLMClient, cfg: ToolConfig) -> List[
         return []
 
 
-def generate_report(issues: List[Issue]) -> str:
+def generate_report(issues: List[Issue], rule_issues: List[Issue] = None, llm_issues: List[Issue] = None) -> str:
     """生成审查报告"""
     try:
-        return render_markdown(issues)
+        # 如果没有提供分类信息，使用默认的render_markdown
+        if rule_issues is None or llm_issues is None:
+            return render_markdown(issues)
+        
+        # 生成分类报告
+        return _generate_categorized_report(issues, rule_issues, llm_issues)
     except Exception as e:
         print(f"⚠️ 生成报告失败: {e}")
         return f"# 审查报告\n\n生成报告时发生错误: {e}"
+
+
+def _generate_categorized_report(issues: List[Issue], rule_issues: List[Issue], llm_issues: List[Issue]) -> str:
+    """生成分类报告"""
+    # 创建规则检查和LLM审查的问题集合
+    rule_issue_ids = {id(issue) for issue in rule_issues}
+    llm_issue_ids = {id(issue) for issue in llm_issues}
+    
+    # 分类问题
+    categorized_rule_issues = []
+    categorized_llm_issues = []
+    
+    for issue in issues:
+        if id(issue) in rule_issue_ids:
+            categorized_rule_issues.append(issue)
+        elif id(issue) in llm_issues:
+            categorized_llm_issues.append(issue)
+        else:
+            # 如果无法确定来源，根据rule_id判断
+            if issue.rule_id.startswith("LLM_") or issue.rule_id.endswith("_AcronymRule") or issue.rule_id.endswith("_ContentRule") or issue.rule_id.endswith("_FormatRule") or issue.rule_id.endswith("_TitleStructureRule"):
+                categorized_llm_issues.append(issue)
+            else:
+                categorized_rule_issues.append(issue)
+    
+    # 生成报告内容
+    report = "# 审查报告\n\n"
+    
+    # 问题统计
+    report += f"### 📊 问题统计\n"
+    report += f"- **规则检查问题**: {len(categorized_rule_issues)} 个\n"
+    report += f"- **LLM智能审查问题**: {len(categorized_llm_issues)} 个\n"
+    report += f"- **总计**: {len(issues)} 个\n\n"
+    
+    # 规则检查问题
+    if categorized_rule_issues:
+        report += "### 🔍 规则检查问题\n\n"
+        for issue in categorized_rule_issues:
+            report += f"- **{issue.rule_id}** | 严重性: {issue.severity} | 页: {issue.slide_index + 1} | 对象: {issue.object_ref}\n"
+            report += f"  - 描述: {issue.message}\n"
+            if issue.suggestion:
+                report += f"  - 建议: {issue.suggestion}\n"
+            report += f"  - 可自动修复: {'是' if issue.can_autofix else '否'} | 已修复: {'是' if getattr(issue, 'is_fixed', False) else '否'}\n\n"
+    else:
+        report += "### 🔍 规则检查问题\n\n✅ 未发现规则检查问题\n\n"
+    
+    # LLM智能审查问题
+    if categorized_llm_issues:
+        report += "### 🤖 LLM智能审查问题\n\n"
+        for issue in categorized_llm_issues:
+            report += f"- **{issue.rule_id}** | 严重性: {issue.severity} | 页: {issue.slide_index + 1} | 对象: {issue.object_ref}\n"
+            report += f"  - 描述: {issue.message}\n"
+            if issue.suggestion:
+                report += f"  - 建议: {issue.suggestion}\n"
+            report += f"  - 可自动修复: {'是' if issue.can_autofix else '否'} | 已修复: {'是' if getattr(issue, 'is_fixed', False) else '否'}\n\n"
+    else:
+        report += "### 🤖 LLM智能审查问题\n\n✅ 未发现LLM审查问题\n\n"
+    
+    # 问题分类统计
+    report += "### 📋 问题分类统计\n"
+    
+    # 规则检查分类
+    if categorized_rule_issues:
+        rule_counts = {}
+        for issue in categorized_rule_issues:
+            rule_counts[issue.rule_id] = rule_counts.get(issue.rule_id, 0) + 1
+        
+        report += "**规则检查分类:**\n\n"
+        for rule_id, count in rule_counts.items():
+            report += f"- {rule_id}: {count} 个\n"
+    else:
+        report += "**规则检查分类:**\n\n无\n"
+    
+    # LLM审查分类
+    if categorized_llm_issues:
+        llm_counts = {}
+        for issue in categorized_llm_issues:
+            llm_counts[issue.rule_id] = llm_counts.get(issue.rule_id, 0) + 1
+        
+        report += "\n**LLM审查分类:**\n\n"
+        for rule_id, count in llm_counts.items():
+            report += f"- {rule_id}: {count} 个\n"
+    else:
+        report += "\n**LLM审查分类:**\n\n无\n"
+    
+    return report
 
 
 def generate_annotated_ppt(input_ppt: str, issues: List[Issue], output_ppt: str) -> bool:

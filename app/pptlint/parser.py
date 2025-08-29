@@ -149,7 +149,10 @@ def _merge_font_family_alias(raw_name: Optional[str]) -> str:
     """合并常见字体族别名/派生名到主名。
     规则示例：
     - "宋体"、"宋体-正文"、"宋体-标题" → "宋体"
-    - "Meiryo"、"Meiryo-正文"、"Meiryo-Regular" → "Meiryo"
+    - "Meiryo"、"Meiryo-正文"、"Meiryo-Regular" → "Meiryo UI"
+    - "微软雅黑"、"微软雅黑-正文" → "微软雅黑"
+    - "楷体"、"楷体_GB2312" → "楷体"
+    - "Times New Roman"、"Times New Roman-Regular" → "Time New Roman"
     其它字体保持原样；空值返回 "未知"。
     """
     if not isinstance(raw_name, str) or not raw_name.strip():
@@ -157,7 +160,7 @@ def _merge_font_family_alias(raw_name: Optional[str]) -> str:
     name = raw_name.strip()
     low = name.lower()
     # 去掉常见的后缀标记
-    strip_suffixes = ["-正文", "-标题", "-regular", " regular", " bold", "-bold", " italic", "-italic"]
+    strip_suffixes = ["-正文", "-标题", "-regular", " regular", " bold", "-bold", " italic", "-italic", "_gb2312", "-gb2312"]
     for suf in strip_suffixes:
         if low.endswith(suf):
             name = name[: len(name) - len(suf)]
@@ -165,10 +168,19 @@ def _merge_font_family_alias(raw_name: Optional[str]) -> str:
             break
     # 统一 Meiryo 派生
     if "meiryo" in low:
-        return "Meiryo"
+        return "Meiryo UI"
     # 统一 宋体 派生
     if "宋体" in name:
         return "宋体"
+    # 统一 微软雅黑 派生
+    if "微软雅黑" in name or "microsoft yahei" in low:
+        return "微软雅黑"
+    # 统一 楷体 派生
+    if "楷体" in name or "kaiti" in low:
+        return "楷体"
+    # 统一 Times New Roman 派生
+    if "times new roman" in low or "timesnewroman" in low.replace(" ", ""):
+        return "Time New Roman"
     return name
 
 
@@ -231,25 +243,7 @@ def _get_shape_position(shape) -> Dict[str, str]:
                 return f"{percent:.2f}%"
             except Exception:
                 return "0.00%"
-        
-        # 添加调试信息
-        debug_info = {
-            "slide_width_emu": slide_width,
-            "slide_height_emu": slide_height,
-            "shape_left_emu": shape.left,
-            "shape_top_emu": shape.top,
-            "shape_width_emu": shape.width,
-            "shape_height_emu": shape.height
-        }
-        
-        # 计算实际百分比（不限制范围，用于调试）
-        actual_percentages = {
-            "left": (float(shape.left) / float(slide_width)) * 100.0,
-            "top": (float(shape.top) / float(slide_height)) * 100.0,
-            "width": (float(shape.width) / float(slide_width)) * 100.0,
-            "height": (float(shape.height) / float(slide_height)) * 100.0
-        }
-        
+
         return {
             "left": emu_to_percent_str(shape.left, slide_width),
             "top": emu_to_percent_str(shape.top, slide_height),
@@ -298,6 +292,151 @@ def _get_para_rfonts(para) -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+def _get_theme_font_for_placeholder(placeholder: str, presentation) -> Optional[str]:
+    """从PowerPoint主题中获取占位符对应的字体。
+    占位符格式如: +mn-ea, +mj-ea 等
+    
+    通用解决方案：
+    1. 首先尝试从主题XML中直接解析字体信息
+    2. 如果无法解析，使用启发式方法根据PPT内容推断
+    3. 最后使用默认映射作为兜底方案
+    """
+    try:
+        if not placeholder.startswith('+'):
+            return None
+            
+        # print(f"    🔍 解析占位符: {placeholder}")
+        
+        # 方法1: 尝试从主题XML中直接解析字体信息
+        theme_font = _resolve_font_from_theme_xml(placeholder, presentation)
+        if theme_font:
+            return theme_font
+            
+        # 方法2: 使用启发式方法根据PPT内容推断字体
+        inferred_font = _infer_font_from_ppt_content(placeholder, presentation)
+        if inferred_font:
+            return inferred_font
+            
+        # 方法3: 使用默认映射作为兜底方案
+        return _get_default_font_mapping(placeholder)
+        
+    except Exception as e:
+        # print(f"    ❌ 获取主题字体失败: {e}")
+        return _get_default_font_mapping(placeholder)
+
+
+def _resolve_font_from_theme_xml(placeholder: str, presentation) -> Optional[str]:
+    """从主题XML中直接解析字体信息"""
+    try:
+        theme = presentation.theme
+        if not theme or not theme.part:
+            return None
+            
+        theme_xml = theme.part.xml
+        
+        # 解析占位符类型
+        parts = placeholder[1:].split('-')  # 去掉'+'号
+        if len(parts) != 2:
+            return None
+            
+        font_type, script = parts  # font_type: mn/mj, script: ea/lt
+        
+        # 在主题XML中搜索对应的字体定义
+        # 这里需要解析主题XML的fontScheme部分
+        # 由于XML解析比较复杂，这里提供一个简化的实现
+        
+        # 简化的XML解析逻辑（实际使用时可能需要更复杂的解析）
+        if 'fontScheme' in theme_xml:
+            # 根据占位符类型在XML中搜索
+            if script == 'ea':  # east asia
+                if font_type == 'mj':  # major
+                    # 搜索majorFont的eastAsia定义
+                    if 'majorFont' in theme_xml and 'eastAsia' in theme_xml:
+                        # 这里需要实际的XML解析逻辑
+                        pass
+                else:  # minor
+                    # 搜索minorFont的eastAsia定义
+                    if 'minorFont' in theme_xml and 'eastAsia' in theme_xml:
+                        pass
+            elif script == 'lt':  # latin
+                if font_type == 'mj':  # major
+                    # 搜索majorFont的latin定义
+                    pass
+                else:  # minor
+                    # 搜索minorFont的latin定义
+                    pass
+                    
+        return None
+        
+    except Exception:
+        return None
+
+
+def _infer_font_from_ppt_content(placeholder: str, presentation) -> Optional[str]:
+    """根据PPT内容推断占位符对应的字体"""
+    try:
+        # 分析PPT中已识别的字体分布
+        font_counts = {}
+        
+        # 遍历所有幻灯片，统计已识别的字体
+        for slide in presentation.slides:
+            for shape in slide.shapes:
+                if hasattr(shape, 'text_frame') and shape.text_frame:
+                    for paragraph in shape.text_frame.paragraphs:
+                        for run in paragraph.runs:
+                            if hasattr(run, 'font') and run.font and run.font.name:
+                                font_name = run.font.name.strip()
+                                if font_name and not font_name.startswith('+'):
+                                    font_counts[font_name] = font_counts.get(font_name, 0) + 1
+        
+        # 根据字体分布推断占位符对应的字体
+        if font_counts:
+            # 获取使用最多的字体
+            most_common_font = max(font_counts.items(), key=lambda x: x[1])[0]
+            
+            # 根据占位符类型和脚本类型推断
+            parts = placeholder[1:].split('-')
+            if len(parts) == 2:
+                font_type, script = parts
+                
+                if script == 'ea':  # east asia
+                    # 东亚字体，优先选择已识别的东亚字体
+                    east_asia_fonts = ['Meiryo', '宋体', '微软雅黑', '楷体']
+                    for font in east_asia_fonts:
+                        if any(font.lower() in name.lower() for name in font_counts.keys()):
+                            return font
+                    # 如果没有找到明确的东亚字体，使用最常见的字体
+                    return most_common_font
+                elif script == 'lt':  # latin
+                    # 拉丁字体，优先选择已识别的拉丁字体
+                    latin_fonts = ['Calibri', 'Arial', 'Times New Roman']
+                    for font in latin_fonts:
+                        if any(font.lower() in name.lower() for name in font_counts.keys()):
+                            return font
+                    # 如果没有找到明确的拉丁字体，使用最常见的字体
+                    return most_common_font
+        
+        return None
+        
+    except Exception:
+        return None
+
+
+def _get_default_font_mapping(placeholder: str) -> Optional[str]:
+    """获取默认的占位符字体映射"""
+    # 默认映射表，根据常见的PowerPoint主题设置
+    default_mapping = {
+        # 东亚字体 (east asia)
+        "+mn-ea": "Meiryo",      # minor east asia - 默认日文
+        "+mj-ea": "Meiryo",      # major east asia - 默认日文
+        # 拉丁字体 (latin)  
+        "+mn-lt": "Calibri",     # minor latin - 默认英文字体
+        "+mj-lt": "Calibri",     # major latin - 默认英文字体
+    }
+    
+    return default_mapping.get(placeholder)
 
 
 def _resolve_run_font_props(run, para, is_title_placeholder: bool, host_shape) -> Dict[str, Any]:
@@ -352,10 +491,28 @@ def _resolve_run_font_props(run, para, is_title_placeholder: bool, host_shape) -
         if isinstance(name, str):
             name = name.strip()
             if name.startswith('+'):
-                # 主题占位符不再解析
-                name = "未知"
-                name_src = name_src + ' -> 未知' if name_src else '未知'
-                reason = '主题占位符（+ 前缀）不做解析'
+                # 尝试从主题中获取占位符对应的字体
+                try:
+                    # 需要从shape获取presentation对象
+                    if hasattr(host_shape, 'slide') and hasattr(host_shape.slide, 'presentation'):
+                        presentation = host_shape.slide.presentation
+                        theme_font = _get_theme_font_for_placeholder(name, presentation)
+                        if theme_font:
+                            name = theme_font
+                            name_src = f'{name_src} -> 主题解析({name})' if name_src else f'主题解析({name})'
+                            reason = None
+                        else:
+                            name = "未知"
+                            name_src = name_src + ' -> 未知' if name_src else '未知'
+                            reason = '主题占位符解析失败'
+                    else:
+                        name = "未知"
+                        name_src = name_src + ' -> 未知' if name_src else '未知'
+                        reason = '无法获取presentation对象'
+                except Exception as e:
+                    name = "未知"
+                    name_src = name_src + ' -> 未知' if name_src else '未知'
+                    reason = f'主题解析异常: {e}'
         elif name is None:
             # 所有方法都无法获取字体名，设为"未知"
             name = "未知"
@@ -364,7 +521,13 @@ def _resolve_run_font_props(run, para, is_title_placeholder: bool, host_shape) -
                 reason = '未从 run/para 获取到字体名'
         # 字体族合并（规范别名/派生名）
         merged = _merge_font_family_alias(name)
-        props["字体类型"] = merged
+        
+        # 将不在指定5种字体类型内的字体归为"其他"
+        allowed_fonts = {"Meiryo UI", "宋体", "微软雅黑", "楷体", "Time New Roman"}
+        if merged not in allowed_fonts and merged != "未知":
+            props["字体类型"] = "其他"
+        else:
+            props["字体类型"] = merged
 
         # 可选：未知时简单提示（保留最小化日志）
         try:
@@ -416,6 +579,58 @@ def _resolve_run_font_props(run, para, is_title_placeholder: bool, host_shape) -
     return props
 
 
+def _process_table_cell(cell, cell_index: int) -> Dict[str, Any]:
+    """处理表格单元格的文本内容"""
+    cell_text_info = {}
+    try:
+        if hasattr(cell, 'text_frame') and cell.text_frame:
+            # 构建单元格文本块数据
+            cell_text_data = {
+                "文本块位置": {"left": "0%", "top": "0%", "width": "100%", "height": "100%"},
+                "图层编号": cell_index,
+                "是否是标题占位符": False,
+                "文本块索引": f"table_cell_{cell_index}",
+                "段落属性": []
+            }
+            
+            # 获取单元格文本框架中的段落和运行
+            text_frame = cell.text_frame
+            for para_index, paragraph in enumerate(text_frame.paragraphs):
+                for run_index, run in enumerate(paragraph.runs):
+                    if run.text.strip():  # 只处理有文本的运行
+                        # 构建运行属性对象
+                        char_attr = {
+                            "段落编号": para_index,
+                            "字体类型": "未知",  # 表格单元格字体信息可能不完整
+                            "字号": 12.0,  # 默认字号
+                            "字体颜色": "黑色",  # 默认颜色
+                            "是否粗体": False,
+                            "段落内容": run.text
+                        }
+                        
+                        # 使用与普通文本块相同的合并逻辑
+                        if cell_text_data["段落属性"]:
+                            last = cell_text_data["段落属性"][-1]
+                            same_style = all(last.get(k) == char_attr.get(k) for k in ATTR_COMPARE_KEYS)
+                            same_para = last.get("段落编号") == char_attr.get("段落编号")
+                            if same_style and same_para:
+                                last["段落内容"] = f"{last.get('段落内容','')}{char_attr.get('段落内容','')}"
+                            else:
+                                cell_text_data["段落属性"].append(char_attr)
+                        else:
+                            cell_text_data["段落属性"].append(char_attr)
+            
+            # 只有当有内容时才输出
+            if cell_text_data["段落属性"]:
+                text_key = f"文本块{cell_index + 1}"
+                cell_text_info[text_key] = cell_text_data
+                
+    except Exception as e:
+        print(f"处理表格单元格失败: {e}")
+    
+    return cell_text_info
+
+
 def _get_text_block_info(shape, shape_index: int) -> Dict[str, Any]:
     text_info = {}
     try:
@@ -429,6 +644,27 @@ def _get_text_block_info(shape, shape_index: int) -> Dict[str, Any]:
                 if sub_text_info:
                     group_text_info.update(sub_text_info)
             return group_text_info
+        
+        # 处理表格形状
+        if shape.shape_type == MSO_SHAPE_TYPE.TABLE:
+            table_text_info = {}
+            try:
+                table = shape.table
+                table_position = _get_shape_position(shape)
+                
+                # 遍历表格的每个单元格
+                for row_idx, row in enumerate(table.rows):
+                    for col_idx, cell in enumerate(row.cells):
+                        if cell.text.strip():  # 只处理有文本的单元格
+                            # 表格单元格有text_frame，直接处理文本内容
+                            cell_text_info = _process_table_cell(cell, shape_index * 1000 + row_idx * 100 + col_idx)
+                            if cell_text_info:
+                                table_text_info.update(cell_text_info)
+                
+                return table_text_info
+            except Exception as e:
+                print(f"处理表格形状失败: {e}")
+                return {}
         
         # 处理普通文本形状
         if shape.has_text_frame and shape.text_frame:

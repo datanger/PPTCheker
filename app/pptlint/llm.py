@@ -38,6 +38,8 @@ class LLMClient:
             req = urllib.request.Request(self.endpoint, method="POST")
             req.add_header("Content-Type", "application/json")
             req.add_header("Authorization", f"Bearer {self.api_key}")
+            
+            # 每次调用都使用新的对话上下文，避免历史对话干扰
             body = {
                 "model": self.model,
                 "messages": [
@@ -47,12 +49,27 @@ class LLMClient:
                 "max_tokens": max_tokens,
                 "temperature": 0.2,
             }
+            
             data = json.dumps(body).encode("utf-8")
-            with urllib.request.urlopen(req, data=data, timeout=30) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-                # OpenAI style
-                return payload.get("choices", [{}])[0].get("message", {}).get("content", "")
-        except Exception:
+            
+            # 增加超时时间，并添加重试机制
+            timeout = 60  # 增加到60秒
+            max_retries = 2
+            
+            for attempt in range(max_retries + 1):
+                try:
+                    with urllib.request.urlopen(req, data=data, timeout=timeout) as resp:
+                        payload = json.loads(resp.read().decode("utf-8"))
+                        # OpenAI style
+                        return payload.get("choices", [{}])[0].get("message", {}).get("content", "")
+                except urllib.error.URLError as e:
+                    if "timeout" in str(e).lower() and attempt < max_retries:
+                        print(f"LLM请求超时，第{attempt + 1}次重试...")
+                        continue
+                    else:
+                        raise e
+        except Exception as e:
+            print(f"LLM调用异常: {e}")
             return ""
 
 

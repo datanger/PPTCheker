@@ -47,7 +47,19 @@ def run_review_workflow(parsing_result_path: str, cfg: ToolConfig, output_ppt: O
     
     # 步骤2：分析PPT结构
     print("🔍 分析PPT结构...")
-    # parsing_data = analyze_from_parsing_result(parsing_data)
+    try:
+        parsing_data = analyze_from_parsing_result(parsing_data)
+        print("✅ PPT结构分析完成")
+        
+        # 将结构分析结果重新写入parsing_result.json
+        import json
+        with open(parsing_result_path, "w", encoding="utf-8") as f:
+            json.dump(parsing_data, f, ensure_ascii=False, indent=2)
+        print(f"💾 结构分析结果已更新到: {parsing_result_path}")
+        
+    except Exception as e:
+        print(f"⚠️ PPT结构分析失败：{e}")
+        # 即使结构分析失败，也继续后续流程
     
     # 步骤3：规则检查
     print("📋 运行规则检查...")
@@ -71,7 +83,7 @@ def run_review_workflow(parsing_result_path: str, cfg: ToolConfig, output_ppt: O
     
     # 步骤5：生成报告
     print("📊 生成审查报告...")
-    res.report_md = generate_report(all_issues)
+    res.report_md = generate_report(all_issues, rule_issues, llm_issues)
     
     # 步骤6：输出标记PPT（如果指定）
     if output_ppt:
@@ -98,6 +110,11 @@ def _perform_llm_review(parsing_data, cfg: ToolConfig, llm: Optional[LLMClient])
     """公共：基于 parsing_result.json 调用LLM进行多维度审查并返回问题列表。"""
     issues: List[Issue] = []
     
+    # 检查配置是否启用LLM
+    if not cfg.llm_enabled:
+        print("🤖 LLM审查已禁用，跳过LLM审查步骤")
+        return issues
+    
     # 如果LLM客户端未提供，自动创建一个
     if not llm:
         print("🤖 自动创建LLM客户端...")
@@ -107,15 +124,42 @@ def _perform_llm_review(parsing_data, cfg: ToolConfig, llm: Optional[LLMClient])
     try:
         print("🤖 创建LLM审查器...")
         reviewer = create_llm_reviewer(llm, cfg)
-        print("🤖 开始格式标准审查...")
-        fmt = reviewer.review_format_standards(parsing_data)
-        print("🤖 开始内容逻辑审查...")
-        logic = reviewer.review_content_logic(parsing_data)
-        print("🤖 开始缩略语审查...")
-        acr = reviewer.review_acronyms(parsing_data)
-        print("🤖 开始标题结构审查...")
-        title = reviewer.review_title_structure(parsing_data)
-        issues = (fmt or []) + (logic or []) + (acr or []) + (title or [])
+        
+        issues = []
+        
+        # 根据配置开关决定是否执行各项审查
+        if cfg.review_format:
+            print("🤖 开始格式标准审查...")
+            fmt = reviewer.review_format_standards(parsing_data)
+            if fmt:
+                issues.extend(fmt)
+        else:
+            print("🤖 格式标准审查已禁用，跳过...")
+        
+        if cfg.review_logic:
+            print("🤖 开始内容逻辑审查...")
+            logic = reviewer.review_content_logic(parsing_data)
+            if logic:
+                issues.extend(logic)
+        else:
+            print("🤖 内容逻辑审查已禁用，跳过...")
+        
+        if cfg.review_acronyms:
+            print("🤖 开始缩略语审查...")
+            acr = reviewer.review_acronyms(parsing_data)
+            if acr:
+                issues.extend(acr)
+        else:
+            print("🤖 缩略语审查已禁用，跳过...")
+        
+        if cfg.review_fluency:
+            print("🤖 开始标题结构审查...")
+            title = reviewer.review_title_structure(parsing_data)
+            if title:
+                issues.extend(title)
+        else:
+            print("🤖 标题结构审查已禁用，跳过...")
+        
     except Exception as e:
         print(f"⚠️ LLM审查失败：{e}")
     return issues

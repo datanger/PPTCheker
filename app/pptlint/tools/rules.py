@@ -45,17 +45,18 @@ def check_font_and_size(doc: DocumentModel, cfg: ToolConfig) -> List[Issue]:
                         suggestion=f"提升至 {cfg.min_font_size_pt}pt",
                         can_autofix=cfg.autofix_size,
                     ))
-                # 日文字体检查
+                # 日文字体检查 - 过滤掉"未知"字体，只检查识别到的字体
                 if tr.language_tag == "ja":
                     font_name_norm = (tr.font_name or "").strip()
-                    if font_name_norm != cfg.jp_font_name:
+                    # 只对识别到的字体进行检查，跳过"未知"字体
+                    if font_name_norm and font_name_norm != "未知" and font_name_norm != cfg.jp_font_name:
                         issues.append(Issue(
                             file=doc.file_path,
                             slide_index=slide.index,
                             object_ref=shp.id,
                             rule_id="FontFamilyRule",
                             severity="warning",
-                            message=f"日文字体非 {cfg.jp_font_name}: {font_name_norm or '未指定'}",
+                            message=f"日文字体非 {cfg.jp_font_name}: {font_name_norm}",
                             suggestion=f"替换为 {cfg.jp_font_name}",
                             can_autofix=cfg.autofix_font,
                         ))

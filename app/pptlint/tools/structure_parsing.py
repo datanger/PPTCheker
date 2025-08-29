@@ -82,10 +82,10 @@ def infer_all_structures(slides_data: List[Dict[str, Any]]) -> Dict[str, Any]:
 
         输出格式（只输出JSON对象，不要解释）：
         {{
-        "topic": {{"title": str, "page": int}},
-        "contents": [{{"title": str, "page": int}}],
-        "sections": [{{"title": str, "page": int}}],
-        "titles": [{{"title": str, "page": int}}]
+        "topic": {{"text": str, "page": int}},
+        "contents": [{{"text": str, "page": int}}],
+        "sections": [{{"text": str, "page": int}}],
+        "titles": [{{"text": str, "page": int}}]
         }}
 
         以下是PPT的原始数据，请直接分析：
@@ -94,7 +94,7 @@ def infer_all_structures(slides_data: List[Dict[str, Any]]) -> Dict[str, Any]:
     raw = _call_llm_system(prompt)
     
     # 调试信息：显示大模型原始返回
-    print(f"🔍 大模型原始返回: {raw}")
+    # print(f"🔍 大模型原始返回: {raw}")
     
     try:
         data = json.loads(raw)
@@ -125,7 +125,7 @@ def analyze_from_parsing_result(parsing_data: Dict[str, Any]) -> Dict[str, Any]:
     topic_title = ""
     topic_page = 1
     if isinstance(topic_obj, dict):
-        topic_title = topic_obj.get('title', '') or ""
+        topic_title = topic_obj.get('text', '') or ""
         tp = topic_obj.get('page')
         if isinstance(tp, int) and tp > 0:
             topic_page = tp
@@ -139,7 +139,7 @@ def analyze_from_parsing_result(parsing_data: Dict[str, Any]) -> Dict[str, Any]:
         structure_lines.append("目录：")
         for item in contents:
             if isinstance(item, dict):
-                title = item.get('title', '')
+                title = item.get('text', '')
                 page = item.get('page', None)
                 line = f"      {title}" + (f" （页码：[{page}]）" if isinstance(page, int) else "")
                 structure_lines.append(line)
@@ -172,7 +172,7 @@ def analyze_from_parsing_result(parsing_data: Dict[str, Any]) -> Dict[str, Any]:
             for t in titles:
                 if isinstance(t, dict):
                     pg = t.get('page')
-                    title = t.get('title', '')
+                    title = t.get('text', '')
                     if isinstance(pg, int):
                         titles_map[pg] = title
         else:
@@ -199,7 +199,7 @@ def analyze_from_parsing_result(parsing_data: Dict[str, Any]) -> Dict[str, Any]:
                 continue
             if page_num in section_pages:
                 sec = section_pages[page_num]
-                stitle = sec.get('title', '')
+                stitle = sec.get('text', '')
                 structure_lines.append(f"章节：{stitle} （页码：[{page_num}]）")
             else:
                 t = titles_map.get(page_num, '')
@@ -208,6 +208,7 @@ def analyze_from_parsing_result(parsing_data: Dict[str, Any]) -> Dict[str, Any]:
     
     # 生成structure字符串
     structure = "\n".join(structure_lines)
+    print(f"🔍 结构分析结果\n: {structure}")
     
     # 生成页类型和页标题数组
     for page_num in range(1, (total_pages or 0) + 1):
@@ -226,7 +227,7 @@ def analyze_from_parsing_result(parsing_data: Dict[str, Any]) -> Dict[str, Any]:
         if page_num == topic_page:
             page_titles.append(topic_title)
         elif page_num in section_pages:
-            page_titles.append(section_pages[page_num].get('title', ''))
+            page_titles.append(section_pages[page_num].get('text', ''))
         else:
             page_titles.append(titles_map.get(page_num, ''))
     

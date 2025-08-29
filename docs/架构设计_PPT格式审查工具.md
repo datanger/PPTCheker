@@ -102,7 +102,7 @@
   - ruleId, severity, message, suggestion, canAutoFix, slideIndex, objectRef
 
 ### 5. 关键算法（简述）
-- 字体/字号：逐 TextRun 校验；日文文本强制字体=Meiyou UI，字号>=12。
+- 字体/字号：逐 TextRun 校验；日文文本强制字体=Meiryo UI，字号>=12。
 - 缩略语：正则匹配 ACRONYM（2-8大写），向前搜索同页/前文是否存在解释（全称或“简称：全称”模板）。
 - 日文流畅性与术语：基于词库+规则提示（不自动改写）；提供候选替换。
 - 逻辑连贯：检查标题层级（字体大小/粗细/占位版式特征）、跨页主题延续；标注断裂处。

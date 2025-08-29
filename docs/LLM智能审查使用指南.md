@@ -107,8 +107,8 @@ export LLM_ENDPOINT="https://api.deepseek.com/v1/chat/completions"
 
 ### 🔍 规则检查问题
 - **FontFamilyRule** | 严重性: warning | 页: 0 | 对象: 7
-  - 描述: 日文字体非 Meiyou UI: 未指定
-  - 建议: 替换为 Meiyou UI
+  - 描述: 日文字体非 Meiryo UI: 未指定
+  - 建议: 替换为 Meiryo UI
 
 ### 🤖 LLM智能审查问题
 - **LLM_ContentRule** | 严重性: info | 页: 2 | 对象: page
