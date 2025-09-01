@@ -25,11 +25,11 @@ import contextlib
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pptlint.config import load_config, ToolConfig
-from pptlint.workflow import run_review_workflow
-from pptlint.llm import LLMClient
-from pptlint.parser import parse_pptx
-from pptlint.cli import generate_output_paths
+from app.pptlint.config import load_config, ToolConfig
+from app.pptlint.workflow import run_review_workflow
+from app.pptlint.llm import LLMClient
+from app.pptlint.parser import parse_pptx
+from app.pptlint.cli import generate_output_paths
 
 
 class ConsoleCapture:
@@ -131,8 +131,46 @@ class SimpleApp(tk.Tk):
         # 控制台捕获器
         self.console_capture = None
         
+        # 日志文件设置
+        self.log_file = None
+        self._setup_log_file()
+        
         self._build_ui()
         self._load_default_config()
+    
+    def __del__(self):
+        """析构函数，确保关闭日志文件"""
+        if hasattr(self, 'log_file') and self.log_file:
+            try:
+                self.log_file.close()
+            except:
+                pass
+
+    def _setup_log_file(self):
+        """设置日志文件"""
+        try:
+            # 创建logs目录
+            logs_dir = "logs"
+            os.makedirs(logs_dir, exist_ok=True)
+            
+            # 生成日志文件名，包含时间戳
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_filename = f"ppt_review_{timestamp}.log"
+            self.log_file_path = os.path.join(logs_dir, log_filename)
+            
+            # 创建日志文件
+            self.log_file = open(self.log_file_path, 'w', encoding='utf-8')
+            
+            # 写入日志文件头
+            self.log_file.write(f"=== PPT审查工具运行日志 ===\n")
+            self.log_file.write(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            self.log_file.write(f"日志文件: {self.log_file_path}\n")
+            self.log_file.write("=" * 50 + "\n\n")
+            self.log_file.flush()
+            
+        except Exception as e:
+            print(f"设置日志文件失败: {e}")
+            self.log_file = None
 
     def _setup_fonts(self):
         """设置字体样式 - Ubuntu优化版本"""
@@ -261,6 +299,7 @@ class SimpleApp(tk.Tk):
         log_control_frame.pack(fill=tk.X, pady=(0, 10))
         ttk.Button(log_control_frame, text="清空日志", command=self._clear_log, width=10).pack(side=tk.LEFT)
         ttk.Button(log_control_frame, text="保存日志", command=self._save_log, width=10).pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Button(log_control_frame, text="打开日志文件", command=self._open_log_file, width=12).pack(side=tk.LEFT, padx=(10, 0))
         
         self.log_text = scrolledtext.ScrolledText(log_frame, height=15, wrap=tk.WORD, font=self.log_font)
         self.log_text.pack(fill=tk.BOTH, expand=True)
@@ -530,20 +569,43 @@ class SimpleApp(tk.Tk):
         if message.endswith('\n'):
             message = message[:-1]
         
-        # 插入消息并换行
-        self.log_text.insert(tk.END, f"{message}\n")
+        # 获取当前时间戳
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        formatted_message = f"[{timestamp}] {message}"
+        
+        # 插入消息并换行到GUI
+        self.log_text.insert(tk.END, f"{formatted_message}\n")
         self.log_text.see(tk.END)
         self.update_idletasks()
+        
+        # 同时写入日志文件
+        if self.log_file:
+            try:
+                self.log_file.write(f"{formatted_message}\n")
+                self.log_file.flush()
+            except Exception as file_error:
+                print(f"[写入日志文件错误] {file_error}: {message}")
 
     def _clear_log(self):
         """清空日志"""
         self.log_text.delete(1.0, tk.END)
+        if self.log_file:
+            try:
+                self.log_file.seek(0)
+                self.log_file.truncate()
+                # 重新写入日志文件头
+                self.log_file.write(f"=== PPT审查工具运行日志 ===\n")
+                self.log_file.write(f"清空时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                self.log_file.write("=" * 50 + "\n\n")
+                self.log_file.flush()
+            except Exception as e:
+                print(f"清空日志文件失败: {e}")
 
     def _save_log(self):
         """保存日志"""
         filename = filedialog.asksaveasfilename(
             defaultextension=".txt",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+            filetypes=[("Text files", "*.txt"), ("Log files", "*.log"), ("All files", "*.*")]
         )
         if filename:
             try:
@@ -552,6 +614,23 @@ class SimpleApp(tk.Tk):
                 messagebox.showinfo("保存成功", f"日志已保存到 {filename}")
             except Exception as e:
                 messagebox.showerror("保存失败", f"保存日志失败: {e}")
+    
+    def _open_log_file(self):
+        """打开日志文件"""
+        if self.log_file and self.log_file_path:
+            try:
+                import subprocess
+                import platform
+                if platform.system() == "Windows":
+                    subprocess.run(["notepad", self.log_file_path])
+                elif platform.system() == "Darwin":  # macOS
+                    subprocess.run(["open", self.log_file_path])
+                else:  # Linux
+                    subprocess.run(["xdg-open", self.log_file_path])
+            except Exception as e:
+                messagebox.showerror("打开失败", f"无法打开日志文件: {e}")
+        else:
+            messagebox.showwarning("警告", "日志文件不存在")
 
 
 def main():
