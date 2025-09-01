@@ -194,7 +194,11 @@ class SimpleApp(tk.Tk):
         api_frame = ttk.Frame(llm_frame)
         api_frame.pack(fill=tk.X, pady=8)
         ttk.Label(api_frame, text="API密钥:", width=12).pack(side=tk.LEFT)
-        ttk.Entry(api_frame, textvariable=self.llm_api_key, width=50, show="*").pack(side=tk.LEFT, padx=8, fill=tk.X, expand=True)
+        # API密钥输入框设为只读，因为密钥已写死在代码中
+        api_entry = ttk.Entry(api_frame, textvariable=self.llm_api_key, width=50, show="*", state="readonly")
+        api_entry.pack(side=tk.LEFT, padx=8, fill=tk.X, expand=True)
+        # 添加提示标签
+        ttk.Label(api_frame, text="(已预配置)", foreground="gray").pack(side=tk.LEFT, padx=(5, 0))
         
         # 初始化模型列表
         self._update_model_list()
@@ -264,6 +268,9 @@ class SimpleApp(tk.Tk):
 
     def _load_default_config(self):
         """加载默认配置"""
+        # 设置默认API密钥
+        self.llm_api_key.set("sk-55286a5c1f2a470081004104ec41af71")
+        
         try:
             # 尝试加载配置文件，支持多种路径
             config_path = "configs/config.yaml"
@@ -276,10 +283,19 @@ class SimpleApp(tk.Tk):
                 config = load_config(config_path)
                 self.llm_provider.set(config.llm_provider)
                 self.llm_model.set(config.llm_model)
-                self.llm_api_key.set(config.llm_api_key)
+                # 不覆盖默认API密钥，保持写死的值
                 self._update_model_list()
         except Exception as e:
             self._log(f"加载配置失败: {e}")
+        
+        # 启动时显示欢迎日志
+        self._log("🚀 PPT审查工具已启动")
+        self._log("📋 当前配置:")
+        self._log(f"   - LLM提供商: {self.llm_provider.get()}")
+        self._log(f"   - 模型: {self.llm_model.get()}")
+        self._log(f"   - API密钥: {self.llm_api_key.get()[:10]}...")
+        self._log("💡 请选择PPT文件开始审查")
+        self._log("-" * 50)
 
     def _run_review(self):
         """运行审查"""
@@ -402,7 +418,9 @@ class SimpleApp(tk.Tk):
             finally:
                 self.run_button.config(state=tk.NORMAL)
 
-        threading.Thread(target=job, daemon=True).start()
+        # 启动后台线程，设置daemon=True避免黑框显示
+        thread = threading.Thread(target=job, daemon=True)
+        thread.start()
 
     def _show_success_dialog(self, output_dir: str, report_path: str, ppt_path: str):
         """显示成功对话框"""
