@@ -167,7 +167,7 @@ def generate_report(issues: List[Issue], rule_issues: List[Issue] = None, llm_is
 
 
 def _generate_categorized_report(issues: List[Issue], rule_issues: List[Issue], llm_issues: List[Issue]) -> str:
-    """生成分类报告"""
+    """生成分类报告 - 按层级结构组织"""
     # 创建规则检查和LLM审查的问题集合
     rule_issue_ids = {id(issue) for issue in rule_issues}
     llm_issue_ids = {id(issue) for issue in llm_issues}
@@ -179,7 +179,7 @@ def _generate_categorized_report(issues: List[Issue], rule_issues: List[Issue], 
     for issue in issues:
         if id(issue) in rule_issue_ids:
             categorized_rule_issues.append(issue)
-        elif id(issue) in llm_issues:
+        elif id(issue) in llm_issue_ids:
             categorized_llm_issues.append(issue)
         else:
             # 如果无法确定来源，根据rule_id判断
@@ -200,53 +200,82 @@ def _generate_categorized_report(issues: List[Issue], rule_issues: List[Issue], 
     # 规则检查问题
     if categorized_rule_issues:
         report += "### 🔍 规则检查问题\n\n"
-        for issue in categorized_rule_issues:
-            report += f"- **{issue.rule_id}** | 严重性: {issue.severity} | 页: {issue.slide_index + 1} | 对象: {issue.object_ref}\n"
-            report += f"  - 描述: {issue.message}\n"
-            if issue.suggestion:
-                report += f"  - 建议: {issue.suggestion}\n"
-            report += f"  - 可自动修复: {'是' if issue.can_autofix else '否'} | 已修复: {'是' if getattr(issue, 'is_fixed', False) else '否'}\n\n"
+        report += _generate_rule_issues_section(categorized_rule_issues)
     else:
         report += "### 🔍 规则检查问题\n\n✅ 未发现规则检查问题\n\n"
     
     # LLM智能审查问题
     if categorized_llm_issues:
         report += "### 🤖 LLM智能审查问题\n\n"
-        for issue in categorized_llm_issues:
+        report += _generate_llm_issues_section(categorized_llm_issues)
+    else:
+        report += "### 🤖 LLM智能审查问题\n\n✅ 未发现LLM审查问题\n\n"
+    
+    return report
+
+
+def _generate_rule_issues_section(issues: List[Issue]) -> str:
+    """生成规则检查问题部分"""
+    if not issues:
+        return ""
+    
+    # 按规则类型分组
+    rule_groups = {}
+    for issue in issues:
+        rule_type = issue.rule_id
+        if rule_type not in rule_groups:
+            rule_groups[rule_type] = []
+        rule_groups[rule_type].append(issue)
+    
+    # 生成报告内容
+    report = ""
+    
+    for rule_type, rule_issues in rule_groups.items():
+        # 规则类型标题
+        report += f"#### {rule_type}\n\n"
+        
+        # 按页码排序
+        sorted_issues = sorted(rule_issues, key=lambda x: x.slide_index)
+        
+        for issue in sorted_issues:
             report += f"- **{issue.rule_id}** | 严重性: {issue.severity} | 页: {issue.slide_index + 1} | 对象: {issue.object_ref}\n"
             report += f"  - 描述: {issue.message}\n"
             if issue.suggestion:
                 report += f"  - 建议: {issue.suggestion}\n"
             report += f"  - 可自动修复: {'是' if issue.can_autofix else '否'} | 已修复: {'是' if getattr(issue, 'is_fixed', False) else '否'}\n\n"
-    else:
-        report += "### 🤖 LLM智能审查问题\n\n✅ 未发现LLM审查问题\n\n"
     
-    # 问题分类统计
-    report += "### 📋 问题分类统计\n"
+    return report
+
+
+def _generate_llm_issues_section(issues: List[Issue]) -> str:
+    """生成LLM智能审查问题部分"""
+    if not issues:
+        return ""
     
-    # 规则检查分类
-    if categorized_rule_issues:
-        rule_counts = {}
-        for issue in categorized_rule_issues:
-            rule_counts[issue.rule_id] = rule_counts.get(issue.rule_id, 0) + 1
+    # 按规则类型分组
+    rule_groups = {}
+    for issue in issues:
+        rule_type = issue.rule_id
+        if rule_type not in rule_groups:
+            rule_groups[rule_type] = []
+        rule_groups[rule_type].append(issue)
+    
+    # 生成报告内容
+    report = ""
+    
+    for rule_type, rule_issues in rule_groups.items():
+        # 规则类型标题
+        report += f"#### {rule_type}\n\n"
         
-        report += "**规则检查分类:**\n\n"
-        for rule_id, count in rule_counts.items():
-            report += f"- {rule_id}: {count} 个\n"
-    else:
-        report += "**规则检查分类:**\n\n无\n"
-    
-    # LLM审查分类
-    if categorized_llm_issues:
-        llm_counts = {}
-        for issue in categorized_llm_issues:
-            llm_counts[issue.rule_id] = llm_counts.get(issue.rule_id, 0) + 1
+        # 按页码排序
+        sorted_issues = sorted(rule_issues, key=lambda x: x.slide_index)
         
-        report += "\n**LLM审查分类:**\n\n"
-        for rule_id, count in llm_counts.items():
-            report += f"- {rule_id}: {count} 个\n"
-    else:
-        report += "\n**LLM审查分类:**\n\n无\n"
+        for issue in sorted_issues:
+            report += f"- **{issue.rule_id}** | 严重性: {issue.severity} | 页: {issue.slide_index + 1} | 对象: {issue.object_ref}\n"
+            report += f"  - 描述: {issue.message}\n"
+            if issue.suggestion:
+                report += f"  - 建议: {issue.suggestion}\n"
+            report += f"  - 可自动修复: {'是' if issue.can_autofix else '否'} | 已修复: {'是' if getattr(issue, 'is_fixed', False) else '否'}\n\n"
     
     return report
 

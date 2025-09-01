@@ -31,7 +31,7 @@ class App(tk.Tk):
         
         # 当前配置
         self.current_config = None
-        
+
         self._build_ui()
         self._load_default_config()
 
@@ -558,7 +558,7 @@ class App(tk.Tk):
         self.btn_run.config(state=tk.DISABLED)
         self.var_status.set("运行中...")
         self._log("开始运行工作流...")
-        
+
         # 在后台线程中运行
         def job():
             try:
