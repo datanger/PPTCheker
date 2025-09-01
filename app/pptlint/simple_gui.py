@@ -78,7 +78,7 @@ class SimpleApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("PPT审查工具")
-        self.geometry("1200x700")
+        self.geometry("800x1100")
         self.resizable(True, True)
         
         # 设置更好的字体
@@ -200,7 +200,7 @@ class SimpleApp(tk.Tk):
         # 添加实时更新按钮
         ttk.Button(api_frame, text="应用", command=self._apply_api_key, width=8).pack(side=tk.LEFT, padx=(10, 0))
         # 添加提示标签
-        ttk.Label(api_frame, text="(可修改)", foreground="blue").pack(side=tk.LEFT, padx=(5, 0))
+        ttk.Label(api_frame, text="", foreground="blue").pack(side=tk.LEFT, padx=(5, 0))
         
         # 初始化模型列表
         self._update_model_list()
