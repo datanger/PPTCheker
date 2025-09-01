@@ -78,7 +78,7 @@ class SimpleApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("PPT审查工具")
-        self.geometry("800x700")
+        self.geometry("1200x700")
         self.resizable(True, True)
         
         # 设置更好的字体
@@ -194,11 +194,13 @@ class SimpleApp(tk.Tk):
         api_frame = ttk.Frame(llm_frame)
         api_frame.pack(fill=tk.X, pady=8)
         ttk.Label(api_frame, text="API密钥:", width=12).pack(side=tk.LEFT)
-        # API密钥输入框设为只读，因为密钥已写死在代码中
-        api_entry = ttk.Entry(api_frame, textvariable=self.llm_api_key, width=50, show="*", state="readonly")
+        # API密钥输入框可编辑，支持实时修改
+        api_entry = ttk.Entry(api_frame, textvariable=self.llm_api_key, width=50, show="*")
         api_entry.pack(side=tk.LEFT, padx=8, fill=tk.X, expand=True)
+        # 添加实时更新按钮
+        ttk.Button(api_frame, text="应用", command=self._apply_api_key, width=8).pack(side=tk.LEFT, padx=(10, 0))
         # 添加提示标签
-        ttk.Label(api_frame, text="(已预配置)", foreground="gray").pack(side=tk.LEFT, padx=(5, 0))
+        ttk.Label(api_frame, text="(可修改)", foreground="blue").pack(side=tk.LEFT, padx=(5, 0))
         
         # 初始化模型列表
         self._update_model_list()
@@ -266,6 +268,24 @@ class SimpleApp(tk.Tk):
             if self.model_combo.get() not in models[provider]:
                 self.model_combo.set(models[provider][0])
 
+    def _apply_api_key(self):
+        """应用新的API密钥"""
+        new_api_key = self.llm_api_key.get().strip()
+        if not new_api_key:
+            messagebox.showerror("错误", "API密钥不能为空")
+            return
+        
+        # 验证API密钥格式
+        if not new_api_key.startswith(('sk-', 'Bearer ')):
+            messagebox.showwarning("警告", "API密钥格式可能不正确，通常以'sk-'或'Bearer '开头")
+        
+        # 更新日志显示
+        self._log(f"🔑 API密钥已更新: {new_api_key[:10]}...")
+        self._log("✅ 新密钥将在下次运行时生效")
+        
+        # 显示成功消息
+        messagebox.showinfo("成功", "API密钥已更新！\n新密钥将在下次运行时生效。")
+
     def _load_default_config(self):
         """加载默认配置"""
         # 设置默认API密钥
@@ -283,7 +303,9 @@ class SimpleApp(tk.Tk):
                 config = load_config(config_path)
                 self.llm_provider.set(config.llm_provider)
                 self.llm_model.set(config.llm_model)
-                # 不覆盖默认API密钥，保持写死的值
+                # 如果配置文件中有API密钥，则使用配置文件中的
+                if config.llm_api_key:
+                    self.llm_api_key.set(config.llm_api_key)
                 self._update_model_list()
         except Exception as e:
             self._log(f"加载配置失败: {e}")
