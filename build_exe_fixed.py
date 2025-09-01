@@ -27,8 +27,42 @@ def build_exe():
         print("❌ PyInstaller未安装，正在安装...")
         subprocess.run([sys.executable, "-m", "pip", "install", "pyinstaller"], check=True)
     
+    # 智能检测可用的数据文件
+    datas_list = []
+    
+    # 检查配置文件
+    if os.path.exists("app/configs/config.yaml"):
+        datas_list.append(('app/configs/config.yaml', 'configs'))
+        print("✅ 找到配置文件: app/configs/config.yaml")
+    else:
+        print("⚠️  配置文件不存在: app/configs/config.yaml")
+    
+    # 检查dicts目录
+    if os.path.exists("dicts"):
+        datas_list.append(('dicts', 'dicts'))
+        print("✅ 找到词库目录: dicts")
+    else:
+        print("⚠️  词库目录不存在: dicts (跳过)")
+    
+    # 检查其他可能的数据文件
+    additional_data_dirs = ['assets', 'resources', 'data']
+    for dir_name in additional_data_dirs:
+        if os.path.exists(dir_name):
+            datas_list.append((dir_name, dir_name))
+            print(f"✅ 找到数据目录: {dir_name}")
+    
+    # 生成datas字符串
+    datas_str = ""
+    for src, dst in datas_list:
+        datas_str += f"        ('{src}', '{dst}'),\n"
+    
+    if not datas_str:
+        datas_str = "        # 没有找到数据文件\n"
+    
+    print(f"📁 将包含的数据文件: {len(datas_list)} 个")
+    
     # 创建spec文件
-    spec_content = '''# -*- mode: python ; coding: utf-8 -*-
+    spec_content = f'''# -*- mode: python ; coding: utf-8 -*-
 
 block_cipher = None
 
@@ -37,9 +71,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('app/configs/config.yaml', 'configs'),
-        ('dicts', 'dicts'),
-    ],
+{datas_str}    ],
     hiddenimports=[
         # 基础Python模块
         'tkinter',
@@ -129,7 +161,7 @@ a = Analysis(
         'pptx.oxml.workbook',
     ],
     hookspath=[],
-    hooksconfig={},
+    hooksconfig={{}},
     runtime_hooks=[],
     excludes=[],
     win_no_prefer_redirects=False,
