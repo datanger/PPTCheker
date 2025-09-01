@@ -1,0 +1,21 @@
+llm_enabled: true
+llm_provider: deepseek
+llm_model: deepseek-chat
+llm_api_key: "your-api-key-here"
+llm_temperature: 0.2
+llm_max_tokens: 99999
+jp_font_name: "Meiryo UI"
+min_font_size_pt: 12
+color_count_threshold: 5
+output_format: "md"
+llm_review:
+  review_format: true
+  review_logic: true
+  review_acronyms: true
+  review_fluency: true
+rules_review:
+  font_family: true
+  font_size: true
+  color_count: true
+  theme_harmony: true
+  acronym_explanation: true

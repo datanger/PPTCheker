@@ -146,7 +146,6 @@ a = Analysis(
         'PIL.Image',
         'PIL.ImageDraw',
         'PIL.ImageFont',
-        'rich',
         'regex',
         'jinja2',
         'streamlit',

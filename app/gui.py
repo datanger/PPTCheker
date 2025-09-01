@@ -25,11 +25,11 @@ import contextlib
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.pptlint.config import load_config, ToolConfig
-from app.pptlint.workflow import run_review_workflow
-from app.pptlint.llm import LLMClient
-from app.pptlint.parser import parse_pptx
-from app.pptlint.cli import generate_output_paths
+from pptlint.config import load_config, ToolConfig
+from pptlint.workflow import run_review_workflow
+from pptlint.llm import LLMClient
+from pptlint.parser import parse_pptx
+from pptlint.cli import generate_output_paths
 
 
 class ConsoleCapture:

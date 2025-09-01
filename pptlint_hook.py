@@ -41,7 +41,7 @@ additional_hiddenimports = [
     'PIL.Image',
     'PIL.ImageDraw',
     'PIL.ImageFont',
-    'rich',
+
     'regex',
     'jinja2',
     'streamlit',
