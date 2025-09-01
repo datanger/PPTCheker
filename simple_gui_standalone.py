@@ -18,8 +18,8 @@ from datetime import datetime
 class StandaloneApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("PPT审查工具 - 独立版")
-        self.geometry("800x600")
+        self.title("PPT审查工具")
+        self.geometry("800x1100")
         self.resizable(True, True)
         
         # 配置变量
@@ -40,7 +40,7 @@ class StandaloneApp(tk.Tk):
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # 标题
-        title_label = ttk.Label(main_frame, text="PPT审查工具 - 独立版", font=("Arial", 16, "bold"))
+        title_label = ttk.Label(main_frame, text="PPT审查工具", font=("Arial", 16, "bold"))
         title_label.pack(pady=(0, 25))
         
         # 文件选择区域
