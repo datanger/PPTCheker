@@ -26,38 +26,14 @@ import contextlib
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 兼容性导入 - 支持开发环境和打包环境
-try:
+
     # 优先尝试绝对导入（打包环境）
-    from pptlint.config import load_config, ToolConfig
-    from pptlint.workflow import run_review_workflow
-    from pptlint.llm import LLMClient
-    from pptlint.parser import parse_pptx
-    from pptlint.cli import generate_output_paths
-    print("✅ 使用绝对导入模式")
-except ImportError:
-    try:
-        # 尝试相对导入（开发环境）
-        from .config import load_config, ToolConfig
-        from .workflow import run_review_workflow
-        from .llm import LLMClient
-        from .parser import parse_pptx
-        from .cli import generate_output_paths
-        print("✅ 使用相对导入模式")
-    except ImportError:
-        # 最后尝试直接导入（兼容性模式）
-        import sys
-        import os
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        parent_dir = os.path.dirname(current_dir)
-        if parent_dir not in sys.path:
-            sys.path.insert(0, parent_dir)
-        
-        from config import load_config, ToolConfig
-        from workflow import run_review_workflow
-        from llm import LLMClient
-        from parser import parse_pptx
-        from cli import generate_output_paths
-        print("✅ 使用兼容性导入模式")
+from pptlint.config import load_config, ToolConfig
+from pptlint.workflow import run_review_workflow
+from pptlint.llm import LLMClient
+from pptlint.parser import parse_pptx
+from pptlint.cli import generate_output_paths
+print("✅ 使用绝对导入模式")
 
 
 class ConsoleCapture:
