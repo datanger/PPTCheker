@@ -7,14 +7,20 @@ PPT审查工具 - 简化GUI启动器（用于exe版本）
 - 配置LLM设置
 - 运行审查
 - 显示成功提示
+- 实时显示控制台输出
 """
 import os
 import sys
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
-import yaml
+try:
+    import yaml
+except ImportError:
+    import PyYAML as yaml
 from datetime import datetime
+import io
+import contextlib
 
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,11 +32,53 @@ from pptlint.parser import parse_pptx
 from pptlint.cli import generate_output_paths
 
 
+class ConsoleCapture:
+    """控制台输出捕获器"""
+    def __init__(self, log_callback):
+        self.log_callback = log_callback
+        self.original_stdout = sys.stdout
+        self.original_stderr = sys.stderr
+        self.stdout_buffer = io.StringIO()
+        self.stderr_buffer = io.StringIO()
+    
+    def __enter__(self):
+        # 创建自定义的输出流，实时回调
+        class RealTimeStream:
+            def __init__(self, original_stream, callback, prefix=""):
+                self.original_stream = original_stream
+                self.callback = callback
+                self.prefix = prefix
+                self.buffer = ""
+            
+            def write(self, text):
+                # 写入原始流
+                self.original_stream.write(text)
+                # 实时回调到GUI
+                self.callback(text)
+            
+            def flush(self):
+                self.original_stream.flush()
+            
+            def close(self):
+                pass
+        
+        # 替换标准输出和错误流
+        sys.stdout = RealTimeStream(self.original_stdout, self.log_callback)
+        sys.stderr = RealTimeStream(self.original_stderr, lambda x: self.log_callback(f"错误: {x}"))
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.stdout = self.original_stdout
+        sys.stderr = self.original_stderr
+        self.stdout_buffer.close()
+        self.stderr_buffer.close()
+
+
 class SimpleApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("PPT审查工具")
-        self.geometry("700x600")
+        self.geometry("800x700")
         self.resizable(True, True)
         
         # 设置更好的字体
@@ -44,6 +92,9 @@ class SimpleApp(tk.Tk):
         self.llm_model = tk.StringVar(value="deepseek-chat")
         self.llm_api_key = tk.StringVar()
         self.mode = tk.StringVar(value="review")
+        
+        # 控制台捕获器
+        self.console_capture = None
         
         self._build_ui()
         self._load_default_config()
@@ -164,7 +215,13 @@ class SimpleApp(tk.Tk):
         log_frame = ttk.LabelFrame(main_frame, text="运行日志", padding="10")
         log_frame.pack(fill=tk.BOTH, expand=True, pady=(15, 0))
         
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=10, wrap=tk.WORD, font=self.log_font)
+        # 添加日志控制按钮
+        log_control_frame = ttk.Frame(log_frame)
+        log_control_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Button(log_control_frame, text="清空日志", command=self._clear_log, width=10).pack(side=tk.LEFT)
+        ttk.Button(log_control_frame, text="保存日志", command=self._save_log, width=10).pack(side=tk.LEFT, padx=(10, 0))
+        
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=15, wrap=tk.WORD, font=self.log_font)
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
     def _select_ppt(self):
@@ -314,9 +371,10 @@ class SimpleApp(tk.Tk):
                         max_tokens=cfg.llm_max_tokens
                     )
                 
-                # 运行审查
+                # 运行审查 - 使用控制台捕获器
                 self._log("步骤2: 开始审查...")
-                res = run_review_workflow(parsing_result_path, cfg, output_ppt_path, llm, input_ppt)
+                with ConsoleCapture(self._log):
+                    res = run_review_workflow(parsing_result_path, cfg, output_ppt_path, llm, input_ppt)
                 
                 # 生成报告
                 if hasattr(res, 'report_md') and res.report_md:
@@ -380,9 +438,32 @@ class SimpleApp(tk.Tk):
 
     def _log(self, message):
         """添加日志消息"""
+        # 如果消息以换行符结尾，则移除它（因为print会自动添加）
+        if message.endswith('\n'):
+            message = message[:-1]
+        
+        # 插入消息并换行
         self.log_text.insert(tk.END, f"{message}\n")
         self.log_text.see(tk.END)
         self.update_idletasks()
+
+    def _clear_log(self):
+        """清空日志"""
+        self.log_text.delete(1.0, tk.END)
+
+    def _save_log(self):
+        """保存日志"""
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if filename:
+            try:
+                with open(filename, "w", encoding="utf-8") as f:
+                    f.write(self.log_text.get(1.0, tk.END))
+                messagebox.showinfo("保存成功", f"日志已保存到 {filename}")
+            except Exception as e:
+                messagebox.showerror("保存失败", f"保存日志失败: {e}")
 
 
 def main():
