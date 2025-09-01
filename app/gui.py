@@ -25,11 +25,39 @@ import contextlib
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pptlint.config import load_config, ToolConfig
-from pptlint.workflow import run_review_workflow
-from pptlint.llm import LLMClient
-from pptlint.parser import parse_pptx
-from pptlint.cli import generate_output_paths
+# 兼容性导入 - 支持开发环境和打包环境
+try:
+    # 优先尝试绝对导入（打包环境）
+    from pptlint.config import load_config, ToolConfig
+    from pptlint.workflow import run_review_workflow
+    from pptlint.llm import LLMClient
+    from pptlint.parser import parse_pptx
+    from pptlint.cli import generate_output_paths
+    print("✅ 使用绝对导入模式")
+except ImportError:
+    try:
+        # 尝试相对导入（开发环境）
+        from .config import load_config, ToolConfig
+        from .workflow import run_review_workflow
+        from .llm import LLMClient
+        from .parser import parse_pptx
+        from .cli import generate_output_paths
+        print("✅ 使用相对导入模式")
+    except ImportError:
+        # 最后尝试直接导入（兼容性模式）
+        import sys
+        import os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        parent_dir = os.path.dirname(current_dir)
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        
+        from config import load_config, ToolConfig
+        from workflow import run_review_workflow
+        from llm import LLMClient
+        from parser import parse_pptx
+        from cli import generate_output_paths
+        print("✅ 使用兼容性导入模式")
 
 
 class ConsoleCapture:
@@ -51,33 +79,28 @@ class ConsoleCapture:
                 self.buffer = ""
             
             def write(self, text):
+                # 安全写入原始流
                 try:
-                    # 检查原始流是否存在且有write方法
                     if self.original_stream and hasattr(self.original_stream, 'write'):
-                        # 写入原始流
                         self.original_stream.write(text)
-                    else:
-                        # 如果原始流无效，使用备用方案
-                        print(f"[备用输出] {text}", end='', flush=True)
-                    
-                    # 实时回调到GUI
-                    if self.callback and callable(self.callback):
-                        try:
-                            self.callback(text)
-                        except Exception as callback_error:
-                            # 回调失败时，使用备用输出
-                            print(f"[回调错误] {callback_error}", end='', flush=True)
-                except Exception as write_error:
-                    # 写入失败时，使用备用输出
-                    print(f"[写入错误] {write_error}: {text}", end='', flush=True)
+                except Exception as e:
+                    # 如果原始流写入失败，忽略错误
+                    pass
+                
+                # 实时回调到GUI
+                try:
+                    if self.callback:
+                        self.callback(text)
+                except Exception as e:
+                    # 如果回调失败，忽略错误
+                    pass
             
             def flush(self):
                 try:
                     if self.original_stream and hasattr(self.original_stream, 'flush'):
                         self.original_stream.flush()
-                except Exception as flush_error:
-                    # 刷新失败时，使用备用输出
-                    print(f"[刷新错误] {flush_error}", end='', flush=True)
+                except Exception:
+                    pass
             
             def close(self):
                 pass
@@ -88,25 +111,19 @@ class ConsoleCapture:
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.stdout = self.original_stdout
+        sys.stderr = self.original_stderr
+        # 安全关闭缓冲区
         try:
-            # 恢复标准输出和错误流
-            sys.stdout = self.original_stdout
-            sys.stderr = self.original_stderr
-        except Exception as restore_error:
-            print(f"[恢复流错误] {restore_error}", end='', flush=True)
-        
-        try:
-            # 安全关闭缓冲区
             if hasattr(self, 'stdout_buffer') and self.stdout_buffer:
                 self.stdout_buffer.close()
-        except Exception as close_error:
-            print(f"[关闭stdout缓冲区错误] {close_error}", end='', flush=True)
-        
+        except Exception:
+            pass
         try:
             if hasattr(self, 'stderr_buffer') and self.stderr_buffer:
                 self.stderr_buffer.close()
-        except Exception as close_error:
-            print(f"[关闭stderr缓冲区错误] {close_error}", end='', flush=True)
+        except Exception:
+            pass
 
 
 class SimpleApp(tk.Tk):
@@ -131,46 +148,8 @@ class SimpleApp(tk.Tk):
         # 控制台捕获器
         self.console_capture = None
         
-        # 日志文件设置
-        self.log_file = None
-        self._setup_log_file()
-        
         self._build_ui()
         self._load_default_config()
-    
-    def __del__(self):
-        """析构函数，确保关闭日志文件"""
-        if hasattr(self, 'log_file') and self.log_file:
-            try:
-                self.log_file.close()
-            except:
-                pass
-
-    def _setup_log_file(self):
-        """设置日志文件"""
-        try:
-            # 创建logs目录
-            logs_dir = "logs"
-            os.makedirs(logs_dir, exist_ok=True)
-            
-            # 生成日志文件名，包含时间戳
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            log_filename = f"ppt_review_{timestamp}.log"
-            self.log_file_path = os.path.join(logs_dir, log_filename)
-            
-            # 创建日志文件
-            self.log_file = open(self.log_file_path, 'w', encoding='utf-8')
-            
-            # 写入日志文件头
-            self.log_file.write(f"=== PPT审查工具运行日志 ===\n")
-            self.log_file.write(f"开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            self.log_file.write(f"日志文件: {self.log_file_path}\n")
-            self.log_file.write("=" * 50 + "\n\n")
-            self.log_file.flush()
-            
-        except Exception as e:
-            print(f"设置日志文件失败: {e}")
-            self.log_file = None
 
     def _setup_fonts(self):
         """设置字体样式 - Ubuntu优化版本"""
@@ -299,7 +278,6 @@ class SimpleApp(tk.Tk):
         log_control_frame.pack(fill=tk.X, pady=(0, 10))
         ttk.Button(log_control_frame, text="清空日志", command=self._clear_log, width=10).pack(side=tk.LEFT)
         ttk.Button(log_control_frame, text="保存日志", command=self._save_log, width=10).pack(side=tk.LEFT, padx=(10, 0))
-        ttk.Button(log_control_frame, text="打开日志文件", command=self._open_log_file, width=12).pack(side=tk.LEFT, padx=(10, 0))
         
         self.log_text = scrolledtext.ScrolledText(log_frame, height=15, wrap=tk.WORD, font=self.log_font)
         self.log_text.pack(fill=tk.BOTH, expand=True)
@@ -488,18 +466,19 @@ class SimpleApp(tk.Tk):
                 try:
                     with ConsoleCapture(self._log):
                         res = run_review_workflow(parsing_result_path, cfg, output_ppt_path, llm, input_ppt)
-                except Exception as capture_error:
-                    self._log(f"⚠️ 控制台捕获模式失败，使用标准模式: {capture_error}")
-                    # 降级到标准模式运行
+                except Exception as workflow_error:
+                    self._log(f"⚠️ 控制台捕获模式失败，使用标准模式: {workflow_error}")
+                    # 降级到标准模式，不使用控制台捕获
                     try:
                         res = run_review_workflow(parsing_result_path, cfg, output_ppt_path, llm, input_ppt)
-                        self._log("✅ 标准模式运行成功")
                     except Exception as std_error:
                         self._log(f"❌ 标准模式也失败: {std_error}")
-                        # 创建空结果对象
-                        from pptlint.model import EmptyResult
+                        # 创建空的审查结果
+                        class EmptyResult:
+                            def __init__(self):
+                                self.issues = []
+                                self.report_md = "# PPT审查报告\n\n## ❌ 审查过程失败\n\n由于技术问题，无法完成自动审查。\n\n### 错误信息\n```\n{std_error}\n```\n\n### 建议\n1. 检查网络连接\n2. 确认API密钥有效\n3. 尝试重新运行\n"
                         res = EmptyResult()
-                        res.report_md = f"# PPT审查失败报告\n\n## 错误信息\n\n审查过程中发生错误：\n\n```\n{capture_error}\n\n标准模式错误：\n{std_error}\n```\n\n## 建议\n\n1. 检查网络连接\n2. 验证API密钥\n3. 确认PPT文件格式\n4. 查看详细错误日志"
                 
                 # 生成报告
                 if hasattr(res, 'report_md') and res.report_md:
@@ -569,43 +548,20 @@ class SimpleApp(tk.Tk):
         if message.endswith('\n'):
             message = message[:-1]
         
-        # 获取当前时间戳
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        formatted_message = f"[{timestamp}] {message}"
-        
-        # 插入消息并换行到GUI
-        self.log_text.insert(tk.END, f"{formatted_message}\n")
+        # 插入消息并换行
+        self.log_text.insert(tk.END, f"{message}\n")
         self.log_text.see(tk.END)
         self.update_idletasks()
-        
-        # 同时写入日志文件
-        if self.log_file:
-            try:
-                self.log_file.write(f"{formatted_message}\n")
-                self.log_file.flush()
-            except Exception as file_error:
-                print(f"[写入日志文件错误] {file_error}: {message}")
 
     def _clear_log(self):
         """清空日志"""
         self.log_text.delete(1.0, tk.END)
-        if self.log_file:
-            try:
-                self.log_file.seek(0)
-                self.log_file.truncate()
-                # 重新写入日志文件头
-                self.log_file.write(f"=== PPT审查工具运行日志 ===\n")
-                self.log_file.write(f"清空时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                self.log_file.write("=" * 50 + "\n\n")
-                self.log_file.flush()
-            except Exception as e:
-                print(f"清空日志文件失败: {e}")
 
     def _save_log(self):
         """保存日志"""
         filename = filedialog.asksaveasfilename(
             defaultextension=".txt",
-            filetypes=[("Text files", "*.txt"), ("Log files", "*.log"), ("All files", "*.*")]
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
         )
         if filename:
             try:
@@ -614,23 +570,6 @@ class SimpleApp(tk.Tk):
                 messagebox.showinfo("保存成功", f"日志已保存到 {filename}")
             except Exception as e:
                 messagebox.showerror("保存失败", f"保存日志失败: {e}")
-    
-    def _open_log_file(self):
-        """打开日志文件"""
-        if self.log_file and self.log_file_path:
-            try:
-                import subprocess
-                import platform
-                if platform.system() == "Windows":
-                    subprocess.run(["notepad", self.log_file_path])
-                elif platform.system() == "Darwin":  # macOS
-                    subprocess.run(["open", self.log_file_path])
-                else:  # Linux
-                    subprocess.run(["xdg-open", self.log_file_path])
-            except Exception as e:
-                messagebox.showerror("打开失败", f"无法打开日志文件: {e}")
-        else:
-            messagebox.showwarning("警告", "日志文件不存在")
 
 
 def main():

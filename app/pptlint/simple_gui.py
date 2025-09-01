@@ -25,11 +25,39 @@ import contextlib
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pptlint.config import load_config, ToolConfig
-from pptlint.workflow import run_review_workflow
-from pptlint.llm import LLMClient
-from pptlint.parser import parse_pptx
-from pptlint.cli import generate_output_paths
+# 兼容性导入 - 支持开发环境和打包环境
+try:
+    # 优先尝试绝对导入（打包环境）
+    from pptlint.config import load_config, ToolConfig
+    from pptlint.workflow import run_review_workflow
+    from pptlint.llm import LLMClient
+    from pptlint.parser import parse_pptx
+    from pptlint.cli import generate_output_paths
+    print("✅ 使用绝对导入模式")
+except ImportError:
+    try:
+        # 尝试相对导入（开发环境）
+        from .config import load_config, ToolConfig
+        from .workflow import run_review_workflow
+        from .llm import LLMClient
+        from .parser import parse_pptx
+        from .cli import generate_output_paths
+        print("✅ 使用相对导入模式")
+    except ImportError:
+        # 最后尝试直接导入（兼容性模式）
+        import sys
+        import os
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        parent_dir = os.path.dirname(current_dir)
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        
+        from config import load_config, ToolConfig
+        from workflow import run_review_workflow
+        from llm import LLMClient
+        from parser import parse_pptx
+        from cli import generate_output_paths
+        print("✅ 使用兼容性导入模式")
 
 
 class ConsoleCapture:
@@ -51,13 +79,28 @@ class ConsoleCapture:
                 self.buffer = ""
             
             def write(self, text):
-                # 写入原始流
-                self.original_stream.write(text)
+                # 安全写入原始流
+                try:
+                    if self.original_stream and hasattr(self.original_stream, 'write'):
+                        self.original_stream.write(text)
+                except Exception as e:
+                    # 如果原始流写入失败，忽略错误
+                    pass
+                
                 # 实时回调到GUI
-                self.callback(text)
+                try:
+                    if self.callback:
+                        self.callback(text)
+                except Exception as e:
+                    # 如果回调失败，忽略错误
+                    pass
             
             def flush(self):
-                self.original_stream.flush()
+                try:
+                    if self.original_stream and hasattr(self.original_stream, 'flush'):
+                        self.original_stream.flush()
+                except Exception:
+                    pass
             
             def close(self):
                 pass
@@ -70,8 +113,17 @@ class ConsoleCapture:
     def __exit__(self, exc_type, exc_val, exc_tb):
         sys.stdout = self.original_stdout
         sys.stderr = self.original_stderr
-        self.stdout_buffer.close()
-        self.stderr_buffer.close()
+        # 安全关闭缓冲区
+        try:
+            if hasattr(self, 'stdout_buffer') and self.stdout_buffer:
+                self.stdout_buffer.close()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'stderr_buffer') and self.stderr_buffer:
+                self.stderr_buffer.close()
+        except Exception:
+            pass
 
 
 class SimpleApp(tk.Tk):
@@ -411,8 +463,22 @@ class SimpleApp(tk.Tk):
                 
                 # 运行审查 - 使用控制台捕获器
                 self._log("步骤2: 开始审查...")
-                with ConsoleCapture(self._log):
-                    res = run_review_workflow(parsing_result_path, cfg, output_ppt_path, llm, input_ppt)
+                try:
+                    with ConsoleCapture(self._log):
+                        res = run_review_workflow(parsing_result_path, cfg, output_ppt_path, llm, input_ppt)
+                except Exception as workflow_error:
+                    self._log(f"⚠️ 控制台捕获模式失败，使用标准模式: {workflow_error}")
+                    # 降级到标准模式，不使用控制台捕获
+                    try:
+                        res = run_review_workflow(parsing_result_path, cfg, output_ppt_path, llm, input_ppt)
+                    except Exception as std_error:
+                        self._log(f"❌ 标准模式也失败: {std_error}")
+                        # 创建空的审查结果
+                        class EmptyResult:
+                            def __init__(self):
+                                self.issues = []
+                                self.report_md = "# PPT审查报告\n\n## ❌ 审查过程失败\n\n由于技术问题，无法完成自动审查。\n\n### 错误信息\n```\n{std_error}\n```\n\n### 建议\n1. 检查网络连接\n2. 确认API密钥有效\n3. 尝试重新运行\n"
+                        res = EmptyResult()
                 
                 # 生成报告
                 if hasattr(res, 'report_md') and res.report_md:

@@ -4,8 +4,19 @@
 python-pptx>=0.6.21
 PyYAML>=6.0
 requests>=2.28.0
+lxml>=4.6.0
+jinja2>=3.0.0
+rich>=12.0.0
 
-# 可选依赖（用于打包）
+# rich依赖
+pygments>=2.10.0
+colorama>=0.4.0
+markupsafe>=2.0.0
+
+# GUI依赖
+tkinter  # 通常为Python标准库，但在某些发行版中需要单独安装
+
+# 打包依赖
 pyinstaller>=5.0.0
 
 # 开发依赖
