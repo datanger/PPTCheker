@@ -1,0 +1,395 @@
+"""
+PPT审查工具 - 简化GUI启动器（用于exe版本）
+
+功能：
+- 选择PPT文件
+- 选择输出目录
+- 配置LLM设置
+- 运行审查
+- 显示成功提示
+"""
+import os
+import sys
+import threading
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox, scrolledtext
+import yaml
+from datetime import datetime
+
+# 添加项目路径
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from pptlint.config import load_config, ToolConfig
+from pptlint.workflow import run_review_workflow
+from pptlint.llm import LLMClient
+from pptlint.parser import parse_pptx
+from pptlint.cli import generate_output_paths
+
+
+class SimpleApp(tk.Tk):
+    def __init__(self) -> None:
+        super().__init__()
+        self.title("PPT审查工具")
+        self.geometry("700x600")
+        self.resizable(True, True)
+        
+        # 设置更好的字体
+        self._setup_fonts()
+        
+        # 配置变量
+        self.input_ppt = tk.StringVar()
+        self.output_dir = tk.StringVar(value="output")
+        self.llm_enabled = tk.BooleanVar(value=True)
+        self.llm_provider = tk.StringVar(value="deepseek")
+        self.llm_model = tk.StringVar(value="deepseek-chat")
+        self.llm_api_key = tk.StringVar()
+        self.mode = tk.StringVar(value="review")
+        
+        self._build_ui()
+        self._load_default_config()
+
+    def _setup_fonts(self):
+        """设置字体样式 - Ubuntu优化版本"""
+        try:
+            # Ubuntu系统推荐字体
+            default_font = ('WenQuanYi Micro Hei', 9)  # 文泉驿微米黑
+            self.title_font = ('WenQuanYi Micro Hei', 12, 'bold')
+            self.log_font = ('DejaVu Sans Mono', 8)
+            
+            # 配置ttk样式
+            style = ttk.Style()
+            style.theme_use('clam')
+            
+            # 设置控件字体
+            style.configure('TLabel', font=default_font)
+            style.configure('TButton', font=default_font)
+            style.configure('TEntry', font=default_font)
+            style.configure('TCombobox', font=default_font)
+            style.configure('TCheckbutton', font=default_font)
+            style.configure('TLabelframe.Label', font=default_font)
+            
+            print("使用Ubuntu优化字体设置")
+                
+        except Exception as e:
+            print(f"字体设置失败: {e}")
+            # 使用系统默认字体
+            self.title_font = ('TkHeadingFont', 12, 'bold')
+            self.log_font = ('TkFixedFont', 8)
+
+    def _build_ui(self):
+        """构建UI界面"""
+        # 主框架
+        main_frame = ttk.Frame(self, padding="15")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 标题
+        title_label = ttk.Label(main_frame, text="PPT审查工具", font=self.title_font)
+        title_label.pack(pady=(0, 25))
+        
+        # 文件选择区域
+        file_frame = ttk.LabelFrame(main_frame, text="文件选择", padding="15")
+        file_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        # PPT文件选择
+        ppt_frame = ttk.Frame(file_frame)
+        ppt_frame.pack(fill=tk.X, pady=8)
+        ttk.Label(ppt_frame, text="PPT文件:", width=12).pack(side=tk.LEFT)
+        ttk.Entry(ppt_frame, textvariable=self.input_ppt, width=50).pack(side=tk.LEFT, padx=8, fill=tk.X, expand=True)
+        ttk.Button(ppt_frame, text="选择", command=self._select_ppt, width=10).pack(side=tk.LEFT)
+        
+        # 输出目录选择
+        output_frame = ttk.Frame(file_frame)
+        output_frame.pack(fill=tk.X, pady=8)
+        ttk.Label(output_frame, text="输出目录:", width=12).pack(side=tk.LEFT)
+        ttk.Entry(output_frame, textvariable=self.output_dir, width=50).pack(side=tk.LEFT, padx=8, fill=tk.X, expand=True)
+        ttk.Button(output_frame, text="选择", command=self._select_output_dir, width=10).pack(side=tk.LEFT)
+        
+        # 运行模式
+        mode_frame = ttk.Frame(file_frame)
+        mode_frame.pack(fill=tk.X, pady=8)
+        ttk.Label(mode_frame, text="运行模式:", width=12).pack(side=tk.LEFT)
+        mode_combo = ttk.Combobox(mode_frame, textvariable=self.mode, values=["review", "edit"], 
+                                 state="readonly", width=20)
+        mode_combo.pack(side=tk.LEFT, padx=8)
+        
+        # LLM配置区域
+        llm_frame = ttk.LabelFrame(main_frame, text="LLM配置", padding="15")
+        llm_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        # 启用LLM
+        enable_frame = ttk.Frame(llm_frame)
+        enable_frame.pack(fill=tk.X, pady=8)
+        ttk.Checkbutton(enable_frame, text="启用LLM审查", variable=self.llm_enabled).pack(side=tk.LEFT)
+        
+        # 提供商选择
+        provider_frame = ttk.Frame(llm_frame)
+        provider_frame.pack(fill=tk.X, pady=8)
+        ttk.Label(provider_frame, text="提供商:", width=12).pack(side=tk.LEFT)
+        provider_combo = ttk.Combobox(provider_frame, textvariable=self.llm_provider, 
+                                     values=["deepseek", "openai", "anthropic", "local"], 
+                                     state="readonly", width=20)
+        provider_combo.pack(side=tk.LEFT, padx=8)
+        provider_combo.bind('<<ComboboxSelected>>', self._on_provider_change)
+        
+        # 模型选择
+        model_frame = ttk.Frame(llm_frame)
+        model_frame.pack(fill=tk.X, pady=8)
+        ttk.Label(model_frame, text="模型:", width=12).pack(side=tk.LEFT)
+        self.model_combo = ttk.Combobox(model_frame, textvariable=self.llm_model, 
+                                       state="readonly", width=20)
+        self.model_combo.pack(side=tk.LEFT, padx=8)
+        
+        # API密钥
+        api_frame = ttk.Frame(llm_frame)
+        api_frame.pack(fill=tk.X, pady=8)
+        ttk.Label(api_frame, text="API密钥:", width=12).pack(side=tk.LEFT)
+        ttk.Entry(api_frame, textvariable=self.llm_api_key, width=50, show="*").pack(side=tk.LEFT, padx=8, fill=tk.X, expand=True)
+        
+        # 初始化模型列表
+        self._update_model_list()
+        
+        # 运行按钮
+        run_frame = ttk.Frame(main_frame)
+        run_frame.pack(pady=25)
+        self.run_button = ttk.Button(run_frame, text="开始审查", command=self._run_review, 
+                                    width=25)
+        self.run_button.pack()
+        
+        # 状态栏
+        self.status_var = tk.StringVar(value="就绪")
+        status_label = ttk.Label(main_frame, textvariable=self.status_var, anchor=tk.W)
+        status_label.pack(fill=tk.X, pady=(15, 0))
+        
+        # 日志区域
+        log_frame = ttk.LabelFrame(main_frame, text="运行日志", padding="10")
+        log_frame.pack(fill=tk.BOTH, expand=True, pady=(15, 0))
+        
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=10, wrap=tk.WORD, font=self.log_font)
+        self.log_text.pack(fill=tk.BOTH, expand=True)
+
+    def _select_ppt(self):
+        """选择PPT文件"""
+        filename = filedialog.askopenfilename(
+            title="选择PPT文件",
+            filetypes=[("PowerPoint文件", "*.pptx"), ("所有文件", "*.*")]
+        )
+        if filename:
+            self.input_ppt.set(filename)
+            # 自动设置输出目录
+            base_name = os.path.splitext(os.path.basename(filename))[0]
+            output_dir = f"output_{base_name}_{datetime.now().strftime('%Y%m%d')}"
+            self.output_dir.set(output_dir)
+
+    def _select_output_dir(self):
+        """选择输出目录"""
+        dirname = filedialog.askdirectory(title="选择输出目录")
+        if dirname:
+            self.output_dir.set(dirname)
+
+    def _on_provider_change(self, event=None):
+        """提供商变更处理"""
+        self._update_model_list()
+
+    def _update_model_list(self):
+        """更新模型列表"""
+        provider = self.llm_provider.get()
+        models = {
+            "deepseek": ["deepseek-chat", "deepseek-coder"],
+            "openai": ["gpt-4", "gpt-3.5-turbo", "gpt-4-turbo"],
+            "anthropic": ["claude-3-opus", "claude-3-sonnet", "claude-3-haiku"],
+            "local": ["qwen2.5-7b", "llama3.1-8b"]
+        }
+        
+        if provider in models:
+            self.model_combo['values'] = models[provider]
+            if self.model_combo.get() not in models[provider]:
+                self.model_combo.set(models[provider][0])
+
+    def _load_default_config(self):
+        """加载默认配置"""
+        try:
+            # 尝试加载配置文件，支持多种路径
+            config_path = "configs/config.yaml"
+            if not os.path.exists(config_path):
+                config_path = "../configs/config.yaml"
+            if not os.path.exists(config_path):
+                config_path = "app/configs/config.yaml"
+            
+            if os.path.exists(config_path):
+                config = load_config(config_path)
+                self.llm_provider.set(config.llm_provider)
+                self.llm_model.set(config.llm_model)
+                self.llm_api_key.set(config.llm_api_key)
+                self._update_model_list()
+        except Exception as e:
+            self._log(f"加载配置失败: {e}")
+
+    def _run_review(self):
+        """运行审查"""
+        # 验证输入
+        input_ppt = self.input_ppt.get().strip()
+        output_dir = self.output_dir.get().strip()
+        
+        if not input_ppt:
+            messagebox.showerror("错误", "请选择PPT文件")
+            return
+        
+        if not os.path.exists(input_ppt):
+            messagebox.showerror("错误", f"PPT文件不存在: {input_ppt}")
+            return
+        
+        if not output_dir:
+            messagebox.showerror("错误", "请设置输出目录")
+            return
+        
+        # 禁用运行按钮
+        self.run_button.config(state=tk.DISABLED)
+        self.status_var.set("运行中...")
+        self._log("开始运行PPT审查...")
+        
+        # 在后台线程中运行
+        def job():
+            try:
+                # 创建输出目录
+                os.makedirs(output_dir, exist_ok=True)
+                
+                # 生成输出路径
+                parsing_result_path, report_path, output_ppt_path = generate_output_paths(
+                    input_ppt, self.mode.get(), output_dir
+                )
+                
+                # 创建配置
+                config_data = {
+                    'llm_enabled': self.llm_enabled.get(),
+                    'llm_provider': self.llm_provider.get(),
+                    'llm_model': self.llm_model.get(),
+                    'llm_api_key': self.llm_api_key.get(),
+                    'llm_temperature': 0.2,
+                    'llm_max_tokens': 99999,
+                    'jp_font_name': "Meiryo UI",
+                    'min_font_size_pt': 12,
+                    'color_count_threshold': 5,
+                    'output_format': "md",
+                    'llm_review': {
+                        'review_format': True,
+                        'review_logic': True,
+                        'review_acronyms': True,
+                        'review_fluency': True
+                    },
+                    'rules_review': {
+                        'font_family': True,
+                        'font_size': True,
+                        'color_count': True,
+                        'theme_harmony': True,
+                        'acronym_explanation': True
+                    }
+                }
+                
+                # 保存临时配置
+                temp_config_path = os.path.join(output_dir, "temp_config.yaml")
+                with open(temp_config_path, 'w', encoding='utf-8') as f:
+                    yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True, indent=2)
+                
+                # 加载配置
+                cfg = load_config(temp_config_path)
+                
+                # 解析PPT
+                self._log("步骤1: 解析PPT文件...")
+                parsing_data = parse_pptx(input_ppt, include_images=False)
+                
+                # 保存解析结果
+                import json
+                with open(parsing_result_path, "w", encoding="utf-8") as f:
+                    json.dump(parsing_data, f, ensure_ascii=False, indent=2)
+                self._log(f"✅ PPT解析完成")
+                
+                # 创建LLM客户端
+                llm = None
+                if cfg.llm_enabled:
+                    llm = LLMClient(
+                        provider=cfg.llm_provider,
+                        api_key=cfg.llm_api_key if cfg.llm_api_key else None,
+                        model=cfg.llm_model,
+                        temperature=cfg.llm_temperature,
+                        max_tokens=cfg.llm_max_tokens
+                    )
+                
+                # 运行审查
+                self._log("步骤2: 开始审查...")
+                res = run_review_workflow(parsing_result_path, cfg, output_ppt_path, llm, input_ppt)
+                
+                # 生成报告
+                if hasattr(res, 'report_md') and res.report_md:
+                    with open(report_path, "w", encoding="utf-8") as f:
+                        f.write(res.report_md)
+                    self._log(f"✅ 报告已生成")
+                
+                # 清理临时文件
+                if os.path.exists(temp_config_path):
+                    os.remove(temp_config_path)
+                
+                # 显示结果
+                total_issues = len(getattr(res, 'issues', []))
+                self._log(f"🎯 审查完成！发现 {total_issues} 个问题")
+                self.status_var.set(f"完成：{total_issues} 个问题")
+                
+                # 显示成功对话框
+                self.after(0, lambda: self._show_success_dialog(output_dir, report_path, output_ppt_path))
+                
+            except Exception as e:
+                error_msg = f"运行失败: {e}"
+                self._log(f"❌ {error_msg}")
+                self.status_var.set("运行失败")
+                messagebox.showerror("运行失败", str(e))
+            finally:
+                self.run_button.config(state=tk.NORMAL)
+
+        threading.Thread(target=job, daemon=True).start()
+
+    def _show_success_dialog(self, output_dir: str, report_path: str, ppt_path: str):
+        """显示成功对话框"""
+        message = f"""✅ PPT审查完成！
+
+📁 结果保存位置：
+   {output_dir}
+
+📄 生成的文件：
+   • 审查报告：{os.path.basename(report_path)}
+   • 标记PPT：{os.path.basename(ppt_path)}
+   • 解析结果：parsing_result.json
+
+💡 提示：
+   • 可以在输出目录中查看详细的审查报告
+   • 标记PPT中已标注了发现的问题
+   • 建议根据报告中的建议进行PPT优化
+
+是否打开输出目录？"""
+        
+        if messagebox.askyesno("审查完成", message):
+            try:
+                import subprocess
+                import platform
+                if platform.system() == "Windows":
+                    subprocess.run(["explorer", output_dir])
+                elif platform.system() == "Darwin":  # macOS
+                    subprocess.run(["open", output_dir])
+                else:  # Linux
+                    subprocess.run(["xdg-open", output_dir])
+            except Exception as e:
+                print(f"无法打开目录: {e}")
+
+    def _log(self, message):
+        """添加日志消息"""
+        self.log_text.insert(tk.END, f"{message}\n")
+        self.log_text.see(tk.END)
+        self.update_idletasks()
+
+
+def main():
+    """主函数"""
+    app = SimpleApp()
+    app.mainloop()
+
+
+if __name__ == "__main__":
+    main()

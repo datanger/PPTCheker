@@ -11,44 +11,77 @@ from typing import Any, Dict, List, Optional
 import urllib.request
 
 
-def _resolve_endpoint(model: Optional[str], explicit_endpoint: Optional[str]) -> Optional[str]:
-    """根据模型名推断默认 endpoint（OpenAI-compatible），显式值优先。"""
+def _resolve_endpoint(provider: str, model: Optional[str], explicit_endpoint: Optional[str]) -> Optional[str]:
+    """根据提供商和模型名推断默认 endpoint（OpenAI-compatible），显式值优先。"""
     if explicit_endpoint:
         return explicit_endpoint
-    name = (model or "").lower()
+    
+    provider_lower = provider.lower()
+    model_lower = (model or "").lower()
+    
     # 常见提供方的默认 OpenAI-compatible chat.completions 端点
-    if "deepseek" in name:
-        return os.getenv("LLM_ENDPOINT", "https://api.deepseek.com/v1/chat/completions")
-    if name.startswith("gpt") or "openai" in name:
-        return os.getenv("LLM_ENDPOINT", "https://api.openai.com/v1/chat/completions")
+    if provider_lower == "deepseek" or "deepseek" in model_lower:
+        return "https://api.deepseek.com/v1/chat/completions"
+    elif provider_lower == "openai" or model_lower.startswith("gpt"):
+        return "https://api.openai.com/v1/chat/completions"
+    elif provider_lower == "anthropic" or "claude" in model_lower:
+        return "https://api.anthropic.com/v1/messages"
+    elif provider_lower == "local":
+        return "http://localhost:11434/v1/chat/completions"  # Ollama默认端点
+    
     # 兜底用环境变量
     return os.getenv("LLM_ENDPOINT")
 
 
 class LLMClient:
-    def __init__(self, endpoint: Optional[str] = None, api_key: Optional[str] = None, model: Optional[str] = None):
-        # 默认使用 deepseek-chat 模型
-        self.model = model or os.getenv("LLM_MODEL", "deepseek-chat")
-        self.endpoint = _resolve_endpoint(self.model, endpoint)
-        # 优先使用 DEEPSEEK_API_KEY，其次使用 LLM_API_KEY
-        self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
+    def __init__(self, provider: str = "deepseek", endpoint: Optional[str] = None, 
+                 api_key: Optional[str] = None, model: Optional[str] = None,
+                 temperature: float = 0.2, max_tokens: int = 1024):
+        self.provider = provider
+        self.model = model or "deepseek-chat"
+        self.endpoint = _resolve_endpoint(provider, self.model, endpoint)
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        
+        # 根据提供商设置API key
+        if api_key:
+            self.api_key = api_key
+        else:
+            # 尝试从环境变量获取对应提供商的API key
+            env_key = f"{provider.upper()}_API_KEY"
+            self.api_key = os.getenv(env_key, "")
 
-    def complete(self, prompt: str, max_tokens: int = 512) -> str:
+    def complete(self, prompt: str, max_tokens: Optional[int] = None) -> str:
         try:
+            if not self.api_key:
+                print("⚠️ 未配置API密钥，LLM功能将不可用")
+                return ""
+            
             req = urllib.request.Request(self.endpoint, method="POST")
             req.add_header("Content-Type", "application/json")
             req.add_header("Authorization", f"Bearer {self.api_key}")
             
-            # 每次调用都使用新的对话上下文，避免历史对话干扰
-            body = {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": "You are a helpful assistant for document review."},
-                    {"role": "user", "content": prompt},
-                ],
-                "max_tokens": max_tokens,
-                "temperature": 0.2,
-            }
+            # 根据提供商调整请求格式
+            if self.provider.lower() == "anthropic":
+                # Anthropic Claude格式
+                body = {
+                    "model": self.model,
+                    "max_tokens": max_tokens or self.max_tokens,
+                    "messages": [
+                        {"role": "user", "content": prompt}
+                    ]
+                }
+            else:
+                # OpenAI兼容格式
+                body = {
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": "You are a helpful assistant for document review."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "max_tokens": max_tokens or self.max_tokens,
+                    "temperature": self.temperature,
+                }
             
             data = json.dumps(body).encode("utf-8")
             
@@ -60,8 +93,15 @@ class LLMClient:
                 try:
                     with urllib.request.urlopen(req, data=data, timeout=timeout) as resp:
                         payload = json.loads(resp.read().decode("utf-8"))
-                        # OpenAI style
-                        return payload.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        
+                        # 根据提供商解析响应
+                        if self.provider.lower() == "anthropic":
+                            # Anthropic Claude响应格式
+                            return payload.get("content", [{}])[0].get("text", "")
+                        else:
+                            # OpenAI兼容响应格式
+                            return payload.get("choices", [{}])[0].get("message", {}).get("content", "")
+                            
                 except urllib.error.URLError as e:
                     if "timeout" in str(e).lower() and attempt < max_retries:
                         print(f"LLM请求超时，第{attempt + 1}次重试...")

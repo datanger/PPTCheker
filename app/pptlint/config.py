@@ -4,6 +4,7 @@
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 import yaml
+import os
 
 
 @dataclass
@@ -32,7 +33,10 @@ class ToolConfig:
 
     # LLM配置
     llm_enabled: bool = True
-    llm_model: str = "deepseek-chat"
+    llm_provider: str = "deepseek"      # LLM提供商
+    llm_model: str = "deepseek-chat"    # 模型名称
+    llm_api_key: str = ""               # API密钥
+    llm_endpoint: str = ""              # 自定义端点
     llm_temperature: float = 0.2
     llm_max_tokens: int = 1024
 
@@ -47,6 +51,9 @@ class ToolConfig:
 
     # 报告配置
     report: Dict[str, bool] = None
+
+    # 支持的模型列表
+    llm_models: Dict[str, List[str]] = None
 
     def __post_init__(self):
         # 设置默认值
@@ -66,6 +73,19 @@ class ToolConfig:
                 "include_suggestions": True,
                 "include_statistics": True
             }
+        
+        if self.llm_models is None:
+            self.llm_models = {
+                "deepseek": ["deepseek-chat", "deepseek-coder"],
+                "openai": ["gpt-4", "gpt-3.5-turbo", "gpt-4-turbo"],
+                "anthropic": ["claude-3-opus", "claude-3-sonnet", "claude-3-haiku"],
+                "local": ["qwen2.5-7b", "llama3.1-8b"]
+            }
+        
+        # 如果API key为空，尝试从环境变量获取
+        if not self.llm_api_key:
+            env_key = f"{self.llm_provider.upper()}_API_KEY"
+            self.llm_api_key = os.getenv(env_key, "")
 
 
 def load_config(path: str) -> ToolConfig:
@@ -81,7 +101,7 @@ def load_config(path: str) -> ToolConfig:
             for review_key, review_value in value.items():
                 if hasattr(ToolConfig, review_key):
                     config_data[review_key] = review_value
-        elif key in ["rules", "report"] and isinstance(value, dict):
+        elif key in ["rules", "report", "llm_models"] and isinstance(value, dict):
             # 对于其他嵌套配置，直接传递
             config_data[key] = value
         elif hasattr(ToolConfig, key):

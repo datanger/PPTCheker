@@ -37,7 +37,7 @@ with st.form("cfg_form"):
     with col1:
         input_file = st.file_uploader("输入PPT(.pptx)", type=["pptx"], accept_multiple_files=False)
         user_req = st.file_uploader("审查需求文档(.md/.yaml)", type=["md", "yaml", "yml"], accept_multiple_files=False)
-        cfg_path = st.text_input("配置文件路径", value="configs/config.yaml")
+        cfg_path = st.text_input("配置文件路径", value="app/configs/config.yaml")
     with col2:
         mode = st.selectbox("运行模式", options=["review", "edit"], index=0)
         out_name = st.text_input("输出PPT文件名", value="标记版.pptx")

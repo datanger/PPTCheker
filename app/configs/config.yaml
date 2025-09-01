@@ -19,11 +19,31 @@ autofix_color: false        # 是否自动修复颜色
 jp_terms_path: "dicts/jp_it_terms.txt"      # 日语IT术语词典
 term_mapping_path: "dicts/term_mapping.csv"  # 术语映射表
 
-# LLM配置（默认启用）
+# LLM配置
 llm_enabled: true             # 是否启用LLM审查
-llm_model: "deepseek-chat"    # 默认使用 DeepSeek 模型
+llm_provider: "deepseek"      # LLM提供商：deepseek, openai, anthropic, local
+llm_model: "deepseek-chat"    # 模型名称
+llm_api_key: ""               # API密钥（留空则从环境变量读取）
+llm_endpoint: ""              # 自定义端点（留空则使用默认）
 llm_temperature: 0.2          # 温度参数（越低越确定）
 llm_max_tokens: 99999         # 最大token数
+
+# 支持的模型列表
+llm_models:
+  deepseek:
+    - "deepseek-chat"
+    - "deepseek-coder"
+  openai:
+    - "gpt-4"
+    - "gpt-3.5-turbo"
+    - "gpt-4-turbo"
+  anthropic:
+    - "claude-3-opus"
+    - "claude-3-sonnet"
+    - "claude-3-haiku"
+  local:
+    - "qwen2.5-7b"
+    - "llama3.1-8b"
 
 # 审查维度开关
 llm_review:

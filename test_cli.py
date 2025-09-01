@@ -49,7 +49,7 @@ def main():
     # 检查必要文件
     required_files = [
         "parsing_result.json",
-        "configs/config.yaml",
+        "app/configs/config.yaml",
         "example2.pptx"
     ]
     
@@ -64,7 +64,7 @@ def main():
     # 测试1: 基础审查模式（生成报告和标记PPT）
     test1_success = run_cli_command([
         "--parsing", "parsing_result.json",
-        "--config", "configs/config.yaml",
+        "--config", "app/configs/config.yaml",
         "--mode", "review",
         "--report", "test_report.md",
         "--output-ppt", "test_output.pptx"
@@ -73,7 +73,7 @@ def main():
     # 测试2: 仅生成报告（不生成PPT）
     test2_success = run_cli_command([
         "--parsing", "parsing_result.json",
-        "--config", "configs/config.yaml",
+        "--config", "app/configs/config.yaml",
         "--mode", "review",
         "--report", "test_report_only.md"
     ], "仅生成报告模式")
@@ -81,7 +81,7 @@ def main():
     # 测试3: 仅生成标记PPT（不生成报告）
     test3_success = run_cli_command([
         "--parsing", "parsing_result.json",
-        "--config", "configs/config.yaml",
+        "--config", "app/configs/config.yaml",
         "--mode", "review",
         "--output-ppt", "test_ppt_only.pptx"
     ], "仅生成标记PPT模式")
@@ -89,7 +89,7 @@ def main():
     # 测试4: 禁用LLM的审查模式
     test4_success = run_cli_command([
         "--parsing", "parsing_result.json",
-        "--config", "configs/config.yaml",
+        "--config", "app/configs/config.yaml",
         "--mode", "review",
         "--llm", "off",
         "--report", "test_no_llm.md",
@@ -99,7 +99,7 @@ def main():
     # 测试5: 自定义配置参数
     test5_success = run_cli_command([
         "--parsing", "parsing_result.json",
-        "--config", "configs/config.yaml",
+        "--config", "app/configs/config.yaml",
         "--mode", "review",
         "--font-size", "14",
         "--color-threshold", "3",
@@ -112,7 +112,7 @@ def main():
     # 测试6: 编辑模式
     test6_success = run_cli_command([
         "--parsing", "parsing_result.json",
-        "--config", "configs/config.yaml",
+        "--config", "app/configs/config.yaml",
         "--mode", "edit",
         "--original-pptx", "example2.pptx",
         "--output-ppt", "test_edited.pptx",

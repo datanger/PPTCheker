@@ -40,7 +40,7 @@ class App(tk.Tk):
         # 基本文件路径
         self.config_vars['input_ppt'] = tk.StringVar()
         self.config_vars['output_dir'] = tk.StringVar(value="output")
-        self.config_vars['config_file'] = tk.StringVar(value="configs/config.yaml")
+        self.config_vars['config_file'] = tk.StringVar(value="app/configs/config.yaml")
         self.config_vars['mode'] = tk.StringVar(value="review")
         self.config_vars['edit_req'] = tk.StringVar(value="请分析PPT内容，提供改进建议")
         
