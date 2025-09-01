@@ -1,35 +1,27 @@
 """
-基于 parser.py 解析结果的高层信息抽取工具
+PPT结构解析工具
 
 功能：
-- 从 parsing_result.json（或传入的结构化数据）中提取：
-  1) 每页标题（优先使用"是否是标题占位符"为 True 的文本块）
-  2) 章节名与目录页识别（结合大模型）
-  3) 全局主题/主题词（结合大模型）
-
-说明：
-- 所有函数仅依赖 parser 的输出结构，不修改 parser 行为
-- 需要调用大模型时，复用现有 llm.py/llm_review.py 的模型调用能力
+- 从parsing_result.json中提取PPT结构信息
+- 识别页面类型、标题层级、章节信息
+- 为LLM审查提供结构化数据
 """
-
-from typing import List, Dict, Any, Optional
 import json
-import os
-import sys
-
+import re
+from typing import Dict, Any, List, Optional
 try:
-    # 包内相对导入（作为包调用时生效）
-    from ..llm import LLMClient
-except Exception:
-    # 兼容脚本直跑：将项目根目录加入 sys.path 后再导入
+    # 优先使用绝对导入（兼容PyInstaller打包）
+    from pptlint.model import DocumentModel, Slide, Shape, TextRun
+except ImportError:
     try:
-        _CURR = os.path.dirname(os.path.abspath(__file__))
-        _ROOT = os.path.abspath(os.path.join(_CURR, os.pardir, os.pardir))
-        if _ROOT not in sys.path:
-            sys.path.insert(0, _ROOT)
-        from app.pptlint.llm import LLMClient
-    except Exception:
-        LLMClient = None  # 若模型不可用，后续调用时做空处理
+        # 尝试相对导入（开发环境）
+        from ..model import DocumentModel, Slide, Shape, TextRun
+    except ImportError:
+        # 兼容直接运行的情况
+        import sys
+        import os
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from model import DocumentModel, Slide, Shape, TextRun
 
 
 def load_parsing_result(path: str = "parsing_result.json") -> List[Dict[str, Any]]:
@@ -43,6 +35,8 @@ def load_parsing_result(path: str = "parsing_result.json") -> List[Dict[str, Any
 def _call_llm_system(prompt: str, temperature: float = 0.2, max_tokens: int = 1024) -> str:
     """简化的大模型调用封装。根据现有 llm.LLMClient 接口实现。"""
     try:
+        # 包内相对导入（作为包调用时生效）
+        from ..llm import LLMClient
         if LLMClient is None:
             return ""
         # 创建LLM客户端实例

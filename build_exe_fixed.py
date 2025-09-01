@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-PPT审查工具 - PyInstaller打包脚本
+PPT审查工具 - 修复版PyInstaller打包脚本
+解决模块导入和依赖问题
 """
 
 import os
@@ -59,7 +60,7 @@ a = Analysis(
         're',
         'tempfile',
         
-        # PPT处理相关
+        # PPT处理相关 - 完整导入
         'pptx',
         'pptx.util',
         'pptx.enum',
@@ -84,7 +85,6 @@ a = Analysis(
         'pptx.oxml.relationships',
         'pptx.oxml.shared',
         'pptx.oxml.simpletypes',
-        'pptx.oxml.table',
         'pptx.oxml.text',
         'pptx.oxml.vml',
         'pptx.oxml.worksheet',
@@ -118,8 +118,17 @@ a = Analysis(
         'regex',
         'jinja2',
         'streamlit',
+        
+        # 额外的隐藏导入
+        'pptx.oxml.shared',
+        'pptx.oxml.simpletypes',
+        'pptx.oxml.table',
+        'pptx.oxml.text',
+        'pptx.oxml.vml',
+        'pptx.oxml.worksheet',
+        'pptx.oxml.workbook',
     ],
-    hookspath=['.'],  # 使用当前目录的hook文件
+    hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
@@ -145,21 +154,20 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,  # 设置为False以隐藏控制台窗口
+    console=True,  # 临时设置为True以显示错误信息
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='icon.ico' if os.path.exists('icon.ico') else None,
 )
 '''
     
     # 写入spec文件
-    with open('ppt_checker.spec', 'w', encoding='utf-8') as f:
+    with open('ppt_checker_fixed.spec', 'w', encoding='utf-8') as f:
         f.write(spec_content)
     
-    print("📝 已创建PyInstaller配置文件")
+    print("📝 已创建修复版PyInstaller配置文件")
     
     # 运行PyInstaller
     print("🔨 开始构建...")
@@ -167,7 +175,7 @@ exe = EXE(
         subprocess.run([
             sys.executable, "-m", "PyInstaller",
             "--clean",
-            "ppt_checker.spec"
+            "ppt_checker_fixed.spec"
         ], check=True)
         
         print("✅ 构建完成！")
@@ -180,7 +188,7 @@ exe = EXE(
                 print(f"🎉 可执行文件已生成: {exe_files[0]}")
                 print(f"📁 位置: {exe_files[0].absolute()}")
                 
-                # 创建简单的启动脚本
+                # 创建启动脚本
                 create_launcher_script()
                 
                 return True
@@ -194,50 +202,56 @@ exe = EXE(
     except subprocess.CalledProcessError as e:
         print(f"❌ 构建失败: {e}")
         return False
+    except Exception as e:
+        print(f"❌ 构建过程中出现错误: {e}")
+        return False
 
 def create_launcher_script():
     """创建启动脚本"""
     launcher_content = '''@echo off
-echo 正在启动PPT审查工具...
-cd /d "%~dp0"
-start "" "PPT审查工具.exe"
+echo 启动PPT审查工具...
+"%~dp0PPT审查工具.exe"
+pause
 '''
     
-    with open('启动PPT审查工具.bat', 'w', encoding='gbk') as f:
+    with open("启动PPT审查工具.bat", "w", encoding="gbk") as f:
         f.write(launcher_content)
     
     print("📝 已创建启动脚本: 启动PPT审查工具.bat")
 
-def clean_build():
-    """清理构建文件"""
-    print("🧹 清理构建文件...")
+def main():
+    """主函数"""
+    print("🔧 PPT审查工具 - 修复版PyInstaller打包脚本")
+    print("=" * 50)
     
-    dirs_to_clean = ['build', '__pycache__']
-    files_to_clean = ['ppt_checker.spec']
+    # 检查必要文件
+    required_files = [
+        "app/pptlint/simple_gui.py",
+        "app/configs/config.yaml",
+        "requirements.txt"
+    ]
     
-    for dir_name in dirs_to_clean:
-        if os.path.exists(dir_name):
-            shutil.rmtree(dir_name)
-            print(f"🗑️ 已删除目录: {dir_name}")
+    missing_files = [f for f in required_files if not os.path.exists(f)]
+    if missing_files:
+        print(f"❌ 缺少必要文件: {missing_files}")
+        print("请确保在项目根目录运行此脚本")
+        return False
     
-    for file_name in files_to_clean:
-        if os.path.exists(file_name):
-            os.remove(file_name)
-            print(f"🗑️ 已删除文件: {file_name}")
+    print("✅ 所有必要文件已就绪")
+    
+    # 构建可执行文件
+    success = build_exe()
+    
+    if success:
+        print("\n🎉 打包完成！")
+        print("📁 可执行文件位置: dist/")
+        print("🚀 使用 '启动PPT审查工具.bat' 启动程序")
+        print("\n⚠️  注意：当前设置为console模式以显示错误信息")
+        print("   如需隐藏控制台，请修改spec文件中的console=False")
+    else:
+        print("\n❌ 打包失败，请检查错误信息")
+    
+    return success
 
 if __name__ == "__main__":
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="PPT审查工具打包脚本")
-    parser.add_argument("--clean", action="store_true", help="清理构建文件")
-    parser.add_argument("--build", action="store_true", help="构建可执行文件")
-    
-    args = parser.parse_args()
-    
-    if args.clean:
-        clean_build()
-    elif args.build:
-        build_exe()
-    else:
-        # 默认构建
-        build_exe()
+    main()

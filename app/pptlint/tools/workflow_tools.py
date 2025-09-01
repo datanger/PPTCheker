@@ -19,20 +19,30 @@ from pathlib import Path
 
 # 导入必要的模块
 try:
-    from ..model import Issue, DocumentModel, Slide, Shape, TextRun, PPTContext, EditSuggestion, EditResult
-    from ..config import ToolConfig
-    from ..llm import LLMClient
-    from ..reporter import render_markdown
-    from ..annotator import annotate_pptx
+    # 优先使用绝对导入（兼容PyInstaller打包）
+    from pptlint.model import Issue, DocumentModel, Slide, Shape, TextRun, PPTContext, EditSuggestion, EditResult
+    from pptlint.config import ToolConfig
+    from pptlint.llm import LLMClient
+    from pptlint.reporter import render_markdown
+    from pptlint.annotator import annotate_pptx
 except ImportError:
-    # 兼容直接运行的情况
-    import sys
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from model import Issue, DocumentModel, Slide, Shape, TextRun
-    from config import ToolConfig
-    from llm import LLMClient
-    from reporter import render_markdown
-    from annotator import annotate_pptx
+    try:
+        # 尝试相对导入（开发环境）
+        from ..model import Issue, DocumentModel, Slide, Shape, TextRun, PPTContext, EditSuggestion, EditResult
+        from ..config import ToolConfig
+        from ..llm import LLMClient
+        from ..reporter import render_markdown
+        from ..annotator import annotate_pptx
+    except ImportError:
+        # 兼容直接运行的情况
+        import sys
+        import os
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from model import Issue, DocumentModel, Slide, Shape, TextRun
+        from config import ToolConfig
+        from llm import LLMClient
+        from reporter import render_markdown
+        from annotator import annotate_pptx
 
 
 def load_parsing_result(file_path: str = "parsing_result.json") -> Dict[str, Any]:
@@ -479,7 +489,7 @@ def apply_edits_to_ppt(ppt_context: PPTContext, edit_suggestions: List[EditSugge
                 elif suggestion.type == "color_change":
                     # 修改颜色
                     if hasattr(shape, 'text_frame') and shape.text_frame:
-                        from ..model import Color
+                        from pptlint.model import Color
                         # 解析颜色值（假设格式为 #RRGGBB）
                         if suggestion.new_value.startswith('#'):
                             r = int(suggestion.new_value[1:3], 16)

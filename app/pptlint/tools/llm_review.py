@@ -9,17 +9,24 @@
 import json
 from typing import List, Dict, Any, Optional
 try:
-    from ..model import DocumentModel, Issue, TextRun
-    from ..llm import LLMClient
-    from ..config import ToolConfig
+    # 优先使用绝对导入（兼容PyInstaller打包）
+    from pptlint.model import DocumentModel, Issue, TextRun
+    from pptlint.llm import LLMClient
+    from pptlint.config import ToolConfig
 except ImportError:
-    # 兼容直接运行的情况
-    import sys
-    import os
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from model import DocumentModel, Issue, TextRun
-    from llm import LLMClient
-    from config import ToolConfig
+    try:
+        # 尝试相对导入（开发环境）
+        from ..model import DocumentModel, Issue, TextRun
+        from ..llm import LLMClient
+        from ..config import ToolConfig
+    except ImportError:
+        # 兼容直接运行的情况
+        import sys
+        import os
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from model import DocumentModel, Issue, TextRun
+        from llm import LLMClient
+        from config import ToolConfig
 
 
 class LLMReviewer:
