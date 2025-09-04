@@ -135,7 +135,7 @@ class LLMReviewer:
             """
         
         try:
-            response = self.llm.complete(prompt, max_tokens=1024)
+            response = self.llm.complete(prompt, max_tokens=self.config.llm_max_tokens)
             if response:
                 # 尝试解析JSON响应
                 cleaned_response = self._clean_json_response(response)
@@ -192,7 +192,7 @@ class LLMReviewer:
             - 专业术语使用是否一致，避免同一概念用不同词汇
             - 表达是否准确清晰，避免模糊不清的表述
             - 是否存在歧义或容易误解的表达
-            - 尤其注意，日文的表达方式和中文的表达方式可能不同，需要特别注意是否符合日文的表达方式
+            - 特别需要检查语言表达是否符合该语种表达习惯，尤其是日语需要重点关注，若发现不符合表达习惯，则标记为问题
 
             **5. 内容结构完整性**
             - 是否遗漏关键信息或重要步骤
@@ -241,7 +241,7 @@ class LLMReviewer:
             print(f"    🌐 使用端点: {self.llm.endpoint}")
             print(f"    📝 提示词长度: {len(prompt)}")
             
-            response = self.llm.complete(prompt, max_tokens=1024)
+            response = self.llm.complete(prompt, max_tokens=self.config.llm_max_tokens)
             print(f"    📥 收到LLM响应: {response[:200] if response else 'None'}...")
             print(f"    📏 响应长度: {len(response) if response else 0}")
             print(f"    🔍 响应类型: {type(response)}")
@@ -270,7 +270,6 @@ class LLMReviewer:
                             can_autofix=item.get("can_autofix", False)
                         )
                         issues.append(issue)
-                    
                     print(f"    ✅ 内容逻辑审查完成，发现 {len(issues)} 个问题")
                     return issues
                 except json.JSONDecodeError as e:
@@ -347,7 +346,7 @@ class LLMReviewer:
         
         try:
             print(f"    📤 发送LLM请求...")
-            response = self.llm.complete(prompt, max_tokens=1024)
+            response = self.llm.complete(prompt, max_tokens=self.config.llm_max_tokens)
             print(f"    📥 收到LLM响应: {response[:100] if response else 'None'}...")
             
             if response:
@@ -512,7 +511,7 @@ class LLMReviewer:
             """
         
         try:
-            response = self.llm.complete(prompt, max_tokens=1024)
+            response = self.llm.complete(prompt, max_tokens=self.config.llm_max_tokens)
             if response:
                 print(f"    📥 收到LLM响应，长度: {len(response)} 字符")
                 print(f"    📄 响应前100字符: {response[:100]}...")

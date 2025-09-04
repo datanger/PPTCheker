@@ -22,42 +22,31 @@ from datetime import datetime
 import io
 import contextlib
 
+def get_resource_path(relative_path):
+    """获取资源文件的绝对路径，兼容开发环境和打包环境"""
+    try:
+        # PyInstaller创建临时文件夹，将路径存储在_MEIPASS中
+        base_path = sys._MEIPASS
+    except Exception:
+        # 开发环境：使用当前文件所在目录
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    
+    return os.path.join(base_path, relative_path)
+
 # 添加项目路径
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if not hasattr(sys, '_MEIPASS'):
+    # 开发环境：添加项目根目录到路径
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 兼容性导入 - 支持开发环境和打包环境
-try:
-    # 优先尝试绝对导入（打包环境）
-    from pptlint.config import load_config, ToolConfig
-    from pptlint.workflow import run_review_workflow
-    from pptlint.llm import LLMClient
-    from pptlint.parser import parse_pptx
-    from pptlint.cli import generate_output_paths
-    print("✅ 使用绝对导入模式")
-except ImportError:
-    try:
-        # 尝试相对导入（开发环境）
-        from .config import load_config, ToolConfig
-        from .workflow import run_review_workflow
-        from .llm import LLMClient
-        from .parser import parse_pptx
-        from .cli import generate_output_paths
-        print("✅ 使用相对导入模式")
-    except ImportError:
-        # 最后尝试直接导入（兼容性模式）
-        import sys
-        import os
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        parent_dir = os.path.dirname(current_dir)
-        if parent_dir not in sys.path:
-            sys.path.insert(0, parent_dir)
-        
-        from config import load_config, ToolConfig
-        from workflow import run_review_workflow
-        from llm import LLMClient
-        from parser import parse_pptx
-        from cli import generate_output_paths
-        print("✅ 使用兼容性导入模式")
+
+from pptlint.config import load_config, ToolConfig
+from pptlint.workflow import run_review_workflow
+from pptlint.llm import LLMClient
+from pptlint.parser import parse_pptx
+from pptlint.cli import generate_output_paths
+print("✅ 使用绝对导入模式")
+
 
 
 class ConsoleCapture:
@@ -290,16 +279,19 @@ class SimpleApp(tk.Tk):
         )
         if filename:
             self.input_ppt.set(filename)
-            # 自动设置输出目录
+            # 自动设置输出目录：与输入文件同文件夹下的output文件夹，使用绝对路径
+            input_dir = os.path.dirname(os.path.abspath(filename))  # 获取绝对路径
             base_name = os.path.splitext(os.path.basename(filename))[0]
-            output_dir = f"output_{base_name}_{datetime.now().strftime('%Y%m%d')}"
+            output_dir = os.path.join(input_dir, "output", f"{base_name}_{datetime.now().strftime('%Y%m%d')}")
             self.output_dir.set(output_dir)
 
     def _select_output_dir(self):
         """选择输出目录"""
         dirname = filedialog.askdirectory(title="选择输出目录")
         if dirname:
-            self.output_dir.set(dirname)
+            # 确保使用绝对路径
+            abs_dirname = os.path.abspath(dirname)
+            self.output_dir.set(abs_dirname)
 
     def _on_provider_change(self, event=None):
         """提供商变更处理"""
@@ -345,28 +337,46 @@ class SimpleApp(tk.Tk):
         
         try:
             # 尝试加载配置文件，支持多种路径
-            config_path = "configs/config.yaml"
-            if not os.path.exists(config_path):
-                config_path = "../configs/config.yaml"
-            if not os.path.exists(config_path):
-                config_path = "app/configs/config.yaml"
+            config_paths = [
+                get_resource_path("configs/config.yaml"),
+                "configs/config.yaml",
+                "../configs/config.yaml",
+                "app/configs/config.yaml"
+            ]
             
-            if os.path.exists(config_path):
-                config = load_config(config_path)
-                self.llm_provider.set(config.llm_provider)
-                self.llm_model.set(config.llm_model)
-                # 如果配置文件中有API密钥，则使用配置文件中的
-                if config.llm_api_key:
-                    self.llm_api_key.set(config.llm_api_key)
-                self._update_model_list()
+            config_loaded = False
+            for config_path in config_paths:
+                if os.path.exists(config_path):
+                    config = load_config(config_path)
+                    # 加载LLM配置
+                    if hasattr(config, 'llm_provider'):
+                        self.llm_provider.set(config.llm_provider)
+                    if hasattr(config, 'llm_model'):
+                        self.llm_model.set(config.llm_model)
+                    # 如果配置文件中有API密钥，则使用配置文件中的
+                    if hasattr(config, 'llm_api_key') and config.llm_api_key:
+                        self.llm_api_key.set(config.llm_api_key)
+                    # 加载LLM启用状态
+                    if hasattr(config, 'llm_enabled'):
+                        self.llm_enabled.set(config.llm_enabled)
+                    self._update_model_list()
+                    
+                    # 记录配置加载成功
+                    self._log(f"✅ 配置文件加载成功: {config_path}")
+                    config_loaded = True
+                    break
+            
+            if not config_loaded:
+                self._log(f"⚠️ 配置文件不存在，尝试的路径: {config_paths}")
         except Exception as e:
-            self._log(f"加载配置失败: {e}")
+            self._log(f"❌ 加载配置失败: {e}")
         
         # 启动时显示欢迎日志
         self._log("🚀 PPT审查工具已启动")
         self._log("📋 当前配置:")
         self._log(f"   - LLM提供商: {self.llm_provider.get()}")
         self._log(f"   - 模型: {self.llm_model.get()}")
+        self._log(f"   - LLM启用: {'是' if self.llm_enabled.get() else '否'}")
         self._log(f"   - API密钥: {self.llm_api_key.get()[:10]}...")
         self._log("💡 请选择PPT文件开始审查")
         self._log("-" * 50)
@@ -374,8 +384,8 @@ class SimpleApp(tk.Tk):
     def _run_review(self):
         """运行审查"""
         # 验证输入
-        input_ppt = self.input_ppt.get().strip()
-        output_dir = self.output_dir.get().strip()
+        input_ppt = os.path.abspath(self.input_ppt.get().strip())  # 确保是绝对路径
+        output_dir = os.path.abspath(self.output_dir.get().strip())  # 确保是绝对路径
         
         if not input_ppt:
             messagebox.showerror("错误", "请选择PPT文件")
@@ -405,40 +415,10 @@ class SimpleApp(tk.Tk):
                     input_ppt, self.mode.get(), output_dir
                 )
                 
-                # 创建配置
-                config_data = {
-                    'llm_enabled': self.llm_enabled.get(),
-                    'llm_provider': self.llm_provider.get(),
-                    'llm_model': self.llm_model.get(),
-                    'llm_api_key': self.llm_api_key.get(),
-                    'llm_temperature': 0.2,
-                    'llm_max_tokens': 99999,
-                    'jp_font_name': "Meiryo UI",
-                    'min_font_size_pt': 12,
-                    'color_count_threshold': 5,
-                    'output_format': "md",
-                    'llm_review': {
-                        'review_format': True,
-                        'review_logic': True,
-                        'review_acronyms': True,
-                        'review_fluency': True
-                    },
-                    'rules_review': {
-                        'font_family': True,
-                        'font_size': True,
-                        'color_count': True,
-                        'theme_harmony': True,
-                        'acronym_explanation': True
-                    }
-                }
-                
-                # 保存临时配置
-                temp_config_path = os.path.join(output_dir, "temp_config.yaml")
-                with open(temp_config_path, 'w', encoding='utf-8') as f:
-                    yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True, indent=2)
-                
+                # 创建配置 - 从配置文件加载默认值，然后覆盖用户设置
                 # 加载配置
-                cfg = load_config(temp_config_path)
+                config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs", "config.yaml")
+                cfg = load_config(config_file)
                 
                 # 解析PPT
                 self._log("步骤1: 解析PPT文件...")
@@ -451,21 +431,16 @@ class SimpleApp(tk.Tk):
                 self._log(f"✅ PPT解析完成")
                 
                 # 创建LLM客户端
-                llm = None
-                if cfg.llm_enabled:
-                    try:
-                        llm = LLMClient(
-                            provider=getattr(cfg, 'llm_provider', 'deepseek'),
-                            api_key=getattr(cfg, 'llm_api_key', None),
-                            endpoint=getattr(cfg, 'llm_endpoint', None),
-                            model=getattr(cfg, 'llm_model', 'deepseek-chat'),
-                            temperature=getattr(cfg, 'llm_temperature', 0.2),
-                            max_tokens=getattr(cfg, 'llm_max_tokens', 9999)
-                        )
-                        self._log(f"✅ LLM客户端创建成功: {getattr(cfg, 'llm_provider', 'deepseek')}/{getattr(cfg, 'llm_model', 'deepseek-chat')}")
-                    except Exception as e:
-                        self._log(f"❌ LLM客户端创建失败: {e}")
-                        llm = None
+                llm = LLMClient(
+                    provider=getattr(cfg, 'llm_provider', 'deepseek'),
+                    api_key=getattr(cfg, 'llm_api_key', None),
+                    endpoint=getattr(cfg, 'llm_endpoint', None),
+                    model=getattr(cfg, 'llm_model', 'deepseek-chat'),
+                    temperature=getattr(cfg, 'llm_temperature', 0.2),
+                    max_tokens=getattr(cfg, 'llm_max_tokens', 9999)
+                )
+                self._log(f"✅ LLM客户端创建成功: {getattr(cfg, 'llm_provider', 'deepseek')}/{getattr(cfg, 'llm_model', 'deepseek-chat')}")
+
                 
                 # 运行审查 - 使用控制台捕获器
                 self._log("步骤2: 开始审查...")
@@ -492,9 +467,6 @@ class SimpleApp(tk.Tk):
                         f.write(res.report_md)
                     self._log(f"✅ 报告已生成")
                 
-                # 清理临时文件
-                if os.path.exists(temp_config_path):
-                    os.remove(temp_config_path)
                 
                 # 显示结果
                 total_issues = len(getattr(res, 'issues', []))

@@ -80,7 +80,14 @@ if submitted:
             # LLM 客户端
             ep = endpoint or None
             ak = api_key or None
-            llm = LLMClient(endpoint=ep, api_key=ak, model=model)
+            llm = LLMClient(
+                provider=provider,
+                endpoint=ep,
+                api_key=ak,
+                model=model,
+                temperature=0.2,
+                max_tokens=9999
+            )
 
             out_dir = os.path.join("out")
             os.makedirs(out_dir, exist_ok=True)

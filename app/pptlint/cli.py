@@ -5,7 +5,6 @@ import argparse
 import os
 from typing import List
 from datetime import datetime
-from rich import print
 
 from .config import load_config, ToolConfig
 from .reporter import render_markdown
@@ -124,7 +123,16 @@ def main():
 
     # LLM 客户端
     from .llm import LLMClient
-    llm = LLMClient() if cfg.llm_enabled else None
+    llm = None
+    if cfg.llm_enabled:
+        llm = LLMClient(
+            provider=getattr(cfg, 'llm_provider', 'deepseek'),
+            api_key=getattr(cfg, 'llm_api_key', None),
+            endpoint=getattr(cfg, 'llm_endpoint', None),
+            model=getattr(cfg, 'llm_model', 'deepseek-chat'),
+            temperature=getattr(cfg, 'llm_temperature', 0.2),
+            max_tokens=getattr(cfg, 'llm_max_tokens', 9999)
+        )
 
     from .workflow import run_review_workflow, run_edit_workflow
 

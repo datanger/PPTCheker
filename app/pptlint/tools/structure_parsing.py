@@ -17,19 +17,13 @@ import json
 import os
 import sys
 
-try:
-    # 包内相对导入（作为包调用时生效）
-    from ..llm import LLMClient
-except Exception:
-    # 兼容脚本直跑：将项目根目录加入 sys.path 后再导入
-    try:
-        _CURR = os.path.dirname(os.path.abspath(__file__))
-        _ROOT = os.path.abspath(os.path.join(_CURR, os.pardir, os.pardir))
-        if _ROOT not in sys.path:
-            sys.path.insert(0, _ROOT)
-        from app.pptlint.llm import LLMClient
-    except Exception:
-        LLMClient = None  # 若模型不可用，后续调用时做空处理
+
+# 兼容脚本直跑：将项目根目录加入 sys.path 后再导入
+_CURR = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.abspath(os.path.join(_CURR, os.pardir, os.pardir))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+from pptlint.llm import LLMClient
 
 
 def load_parsing_result(path: str = "parsing_result.json") -> List[Dict[str, Any]]:
@@ -40,23 +34,12 @@ def load_parsing_result(path: str = "parsing_result.json") -> List[Dict[str, Any
         return json.load(f)
 
 
-def _call_llm_system(prompt: str, temperature: float = 0.2, max_tokens: int = 1024) -> str:
-    """简化的大模型调用封装。根据现有 llm.LLMClient 接口实现。"""
-    try:
-        if LLMClient is None:
-            return ""
-        # 创建LLM客户端实例
-        llm_client = LLMClient()
-        # 调用complete方法
-        return llm_client.complete(prompt=prompt, max_tokens=max_tokens)
-    except Exception:
-        return ""
-
-
-def infer_all_structures(slides_data: List[Dict[str, Any]]) -> Dict[str, Any]:
+def infer_all_structures(slides_data: List[Dict[str, Any]], llm: Optional[LLMClient] = None) -> Dict[str, Any]:
     """一次性向大模型询问并返回：题目、目录页、章节划分、每页标题。
     返回：{"topic": str, "contents": [int], "sections": [{"title": str, "pages": [int]}], "titles": [str]}
     """
+    print(f"🔍 开始分析PPT结构，幻灯片数量: {len(slides_data)}")
+    
     # 直接传递PPT原始数据给大模型分析
     prompt = f"""你是PPT结构分析专家。任务：基于提供的PPT原始数据进行分析，分析出PPT的题目、目录、章节页、每页标题，并只输出合法JSON。
 
@@ -91,31 +74,26 @@ def infer_all_structures(slides_data: List[Dict[str, Any]]) -> Dict[str, Any]:
         以下是PPT的原始数据，请直接分析：
         {json.dumps(slides_data, ensure_ascii=False, indent=2)}"""
 
-    raw = _call_llm_system(prompt)
-    
-    # 调试信息：显示大模型原始返回
-    # print(f"🔍 大模型原始返回: {raw}")
-    
-    try:
-        data = json.loads(raw)
-        if isinstance(data, dict):
-            return {
-                "topic": data.get("topic", ""),           # 兼容 str 或 {title,page}
-                "contents": data.get("contents", []),       # 兼容含/不含 level
-                "sections": data.get("sections", []),       # 兼容 {title,page} 或 {title,pages}
-                "titles": data.get("titles", [])            # 兼容 [str] 或 [{title,page}]
-            }
-    except Exception as e:
-        print(f"🔍 JSON解析错误: {e}")
-        pass
-    return {"topic": "", "contents": [], "sections": [], "titles": []}
+
+    print(f"🔍 开始LLM调用: provider={llm.provider}, model={llm.model}, max_tokens={llm.max_tokens}")
+    raw = llm.complete(prompt)
+
+    data = json.loads(raw)
+    return data
 
 
-def analyze_from_parsing_result(parsing_data: Dict[str, Any]) -> Dict[str, Any]:
+
+
+def analyze_from_parsing_result(parsing_data: Dict[str, Any], llm: Optional[LLMClient] = None) -> Dict[str, Any]:
     """一站式：加载parser结果 → 调一次LLM返回题目/目录/章节/每页标题。
     返回：{"topic": str, "contents": [...], "sections": [...], "titles": [...], "structure": str, "page_types": [...], "page_titles": [...]}。
     完全依赖大模型分析，无规则法回退。"""
-    llm_all = infer_all_structures(parsing_data)
+    # 提取幻灯片数据
+    slides_data = parsing_data.get("contents", [])
+    if not slides_data:
+        return parsing_data
+    
+    llm_all = infer_all_structures(slides_data, llm)
     
     # 生成PPT结构汇总字符串
     structure_lines = []
@@ -208,7 +186,7 @@ def analyze_from_parsing_result(parsing_data: Dict[str, Any]) -> Dict[str, Any]:
     
     # 生成structure字符串
     structure = "\n".join(structure_lines)
-    print(f"🔍 结构分析结果\n: {structure}")
+    print(f"🔍 结构分析结果:\n {structure}")
     
     # 生成页类型和页标题数组
     for page_num in range(1, (total_pages or 0) + 1):
@@ -243,10 +221,26 @@ def analyze_from_parsing_result(parsing_data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
+    from pptlint.config import load_config
+    cfg = load_config("configs/config.yaml")
+    print(cfg.llm_provider)
+    print(cfg.llm_api_key)
+    print(cfg.llm_endpoint)
+    print(cfg.llm_model)
+    print(cfg.llm_temperature)
+    print(cfg.llm_max_tokens)
+    llm = LLMClient(
+        provider=getattr(cfg, 'llm_provider', 'deepseek'),
+        api_key=getattr(cfg, 'llm_api_key', None),
+        endpoint=getattr(cfg, 'llm_endpoint', None),
+        model=getattr(cfg, 'llm_model', 'deepseek-chat'),
+        temperature=getattr(cfg, 'llm_temperature', 0.2),
+        max_tokens=getattr(cfg, 'llm_max_tokens', 9999)
+    )
     # 静默运行，只更新 parsing_result.json
     parsing_data = load_parsing_result("parsing_result.json")
 
-    parsing_data = analyze_from_parsing_result(parsing_data)
+    parsing_data = analyze_from_parsing_result(parsing_data, llm)
     
     print(parsing_data['structure'])
     

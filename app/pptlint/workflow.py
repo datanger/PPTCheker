@@ -48,7 +48,7 @@ def run_review_workflow(parsing_result_path: str, cfg: ToolConfig, output_ppt: O
     # 步骤2：分析PPT结构
     print("🔍 分析PPT结构...")
     try:
-        parsing_data = analyze_from_parsing_result(parsing_data)
+        parsing_data = analyze_from_parsing_result(parsing_data, llm)
         print("✅ PPT结构分析完成")
         
         # 将结构分析结果重新写入parsing_result.json
@@ -109,17 +109,6 @@ def run_review_workflow(parsing_result_path: str, cfg: ToolConfig, output_ppt: O
 def _perform_llm_review(parsing_data, cfg: ToolConfig, llm: Optional[LLMClient]) -> List[Issue]:
     """公共：基于 parsing_result.json 调用LLM进行多维度审查并返回问题列表。"""
     issues: List[Issue] = []
-    
-    # 检查配置是否启用LLM
-    if not cfg.llm_enabled:
-        print("🤖 LLM审查已禁用，跳过LLM审查步骤")
-        return issues
-    
-    # 如果LLM客户端未提供，自动创建一个
-    if not llm:
-        print("🤖 自动创建LLM客户端...")
-        from .llm import LLMClient
-        llm = LLMClient()
     
     try:
         print("🤖 创建LLM审查器...")
@@ -198,11 +187,6 @@ def run_edit_workflow(
     
     # 步骤4：使用LLM分析并生成编辑建议
     print("🤖 使用LLM分析PPT内容...")
-    # 如果LLM客户端未提供，自动创建一个
-    if not llm:
-        print("🤖 自动创建LLM客户端...")
-        from .llm import LLMClient
-        llm = LLMClient()
     edit_suggestions = run_llm_edit_analysis(parsing_data, llm, edit_requirements)
     
     if edit_suggestions:
@@ -278,3 +262,6 @@ def generate_edit_report(edit_result, edit_suggestions: List) -> str:
     return report
 
 
+if __name__ == "__main__":
+    res = run_edit_workflow("data/parsing_result.json", "example2.pptx", ToolConfig(), "data/output.pptx")
+    print(res.report_md)

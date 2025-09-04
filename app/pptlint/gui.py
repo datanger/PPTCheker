@@ -31,7 +31,7 @@ class App(tk.Tk):
         
         # 当前配置
         self.current_config = None
-
+        
         self._build_ui()
         self._load_default_config()
 
@@ -40,7 +40,7 @@ class App(tk.Tk):
         # 基本文件路径
         self.config_vars['input_ppt'] = tk.StringVar()
         self.config_vars['output_dir'] = tk.StringVar(value="output")
-        self.config_vars['config_file'] = tk.StringVar(value="app/configs/config.yaml")
+        self.config_vars['config_file'] = tk.StringVar(value="configs/config.yaml")
         self.config_vars['mode'] = tk.StringVar(value="review")
         self.config_vars['edit_req'] = tk.StringVar(value="请分析PPT内容，提供改进建议")
         
@@ -558,7 +558,7 @@ class App(tk.Tk):
         self.btn_run.config(state=tk.DISABLED)
         self.var_status.set("运行中...")
         self._log("开始运行工作流...")
-
+        
         # 在后台线程中运行
         def job():
             try:
@@ -610,7 +610,19 @@ class App(tk.Tk):
                 # 创建LLM客户端
                 llm = None
                 if cfg.llm_enabled:
-                    llm = LLMClient()
+                    try:
+                        llm = LLMClient(
+                            provider=getattr(cfg, 'llm_provider', 'deepseek'),
+                            api_key=getattr(cfg, 'llm_api_key', None),
+                            endpoint=getattr(cfg, 'llm_endpoint', None),
+                            model=getattr(cfg, 'llm_model', 'deepseek-chat'),
+                            temperature=getattr(cfg, 'llm_temperature', 0.2),
+                            max_tokens=getattr(cfg, 'llm_max_tokens', 9999)
+                        )
+                        self._log(f"✅ LLM客户端创建成功: {getattr(cfg, 'llm_provider', 'deepseek')}/{getattr(cfg, 'llm_model', 'deepseek-chat')}")
+                    except Exception as e:
+                        self._log(f"❌ LLM客户端创建失败: {e}")
+                        llm = None
                 
                 # 运行工作流
                 if mode == "review":

@@ -579,14 +579,14 @@ def _resolve_run_font_props(run, para, is_title_placeholder: bool, host_shape) -
     return props
 
 
-def _process_table_cell(cell, cell_index: int, position: Dict[str, str]) -> Dict[str, Any]:
+def _process_table_cell(cell, cell_index: int) -> Dict[str, Any]:
     """处理表格单元格的文本内容"""
     cell_text_info = {}
     try:
         if hasattr(cell, 'text_frame') and cell.text_frame:
             # 构建单元格文本块数据
             cell_text_data = {
-                "文本块位置": position,
+                "文本块位置": {"left": "0%", "top": "0%", "width": "100%", "height": "100%"},
                 "图层编号": cell_index,
                 "是否是标题占位符": False,
                 "文本块索引": f"table_cell_{cell_index}",
@@ -650,60 +650,14 @@ def _get_text_block_info(shape, shape_index: int) -> Dict[str, Any]:
             table_text_info = {}
             try:
                 table = shape.table
-                # 计算幻灯片尺寸
-                try:
-                    slide_width = shape.part.slide_width
-                    slide_height = shape.part.slide_height
-                except Exception:
-                    slide_width = 9144000
-                    slide_height = 6858000
-                
-                # EMU 转 百分比
-                def emu_to_percent_str(emu_val, slide_dimension) -> str:
-                    try:
-                        percent = (float(emu_val) / float(slide_dimension)) * 100.0
-                        return f"{percent:.2f}%"
-                    except Exception:
-                        return "0.00%"
+                table_position = _get_shape_position(shape)
                 
                 # 遍历表格的每个单元格
                 for row_idx, row in enumerate(table.rows):
                     for col_idx, cell in enumerate(row.cells):
                         if cell.text.strip():  # 只处理有文本的单元格
-                            # 计算单元格的绝对位置（基于表格左上角 + 行高/列宽累计）
-                            try:
-                                # 列偏移与宽度
-                                col_offset = 0
-                                for c in range(col_idx):
-                                    col_offset += table.columns[c].width
-                                col_width = table.columns[col_idx].width
-                                # 行偏移与高度
-                                row_offset = 0
-                                for r in range(row_idx):
-                                    row_offset += table.rows[r].height
-                                row_height = table.rows[row_idx].height
-                                # 形状左上角 + 偏移
-                                cell_left = shape.left + col_offset
-                                cell_top = shape.top + row_offset
-                                # 百分比位置
-                                position = {
-                                    "left": emu_to_percent_str(cell_left, slide_width),
-                                    "top": emu_to_percent_str(cell_top, slide_height),
-                                    "width": emu_to_percent_str(col_width, slide_width),
-                                    "height": emu_to_percent_str(row_height, slide_height),
-                                }
-                            except Exception:
-                                # 回退为整表位置
-                                pos = _get_shape_position(shape)
-                                position = {"left": pos.get("left", "0%"), "top": pos.get("top", "0%"),
-                                            "width": pos.get("width", "100%"), "height": pos.get("height", "100%")}
-
                             # 表格单元格有text_frame，直接处理文本内容
-                            cell_text_info = _process_table_cell(
-                                cell,
-                                shape_index * 1000 + row_idx * 100 + col_idx,
-                                position,
-                            )
+                            cell_text_info = _process_table_cell(cell, shape_index * 1000 + row_idx * 100 + col_idx)
                             if cell_text_info:
                                 table_text_info.update(cell_text_info)
                 
