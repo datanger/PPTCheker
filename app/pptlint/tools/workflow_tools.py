@@ -155,12 +155,19 @@ def run_llm_review(doc: DocumentModel, llm: LLMClient, cfg: ToolConfig) -> List[
 def generate_report(issues: List[Issue], rule_issues: List[Issue] = None, llm_issues: List[Issue] = None) -> str:
     """生成审查报告"""
     try:
+        # 去重：同一页中同一个问题只出现一次
+        deduplicated_issues = _deduplicate_issues_by_page(issues)
+        
         # 如果没有提供分类信息，使用默认的render_markdown
         if rule_issues is None or llm_issues is None:
-            return render_markdown(issues)
+            return render_markdown(deduplicated_issues)
+        
+        # 对分类的问题也进行去重
+        deduplicated_rule_issues = _deduplicate_issues_by_page(rule_issues) if rule_issues else []
+        deduplicated_llm_issues = _deduplicate_issues_by_page(llm_issues) if llm_issues else []
         
         # 生成分类报告
-        return _generate_categorized_report(issues, rule_issues, llm_issues)
+        return _generate_categorized_report(deduplicated_issues, deduplicated_rule_issues, deduplicated_llm_issues)
     except Exception as e:
         print(f"⚠️ 生成报告失败: {e}")
         return f"# 审查报告\n\n生成报告时发生错误: {e}"
@@ -551,3 +558,28 @@ def _count_issues_by_rule(issues: List[Issue]) -> Dict[str, int]:
         rule_id = getattr(issue, 'rule_id', 'unknown')
         counts[rule_id] = counts.get(rule_id, 0) + 1
     return counts
+
+
+def _deduplicate_issues_by_page(issues: List[Issue]) -> List[Issue]:
+    """去重：同一页中同一个问题只出现一次"""
+    # 使用字典来跟踪每个页面中已经出现的问题
+    page_issues = {}  # {page_index: {issue_key: issue}}
+    
+    for issue in issues:
+        page_index = issue.slide_index
+        # 创建问题的唯一标识：rule_id + message的前50个字符
+        issue_key = f"{issue.rule_id}:{issue.message[:50]}"
+        
+        if page_index not in page_issues:
+            page_issues[page_index] = {}
+        
+        # 如果该页面还没有这个问题，则添加
+        if issue_key not in page_issues[page_index]:
+            page_issues[page_index][issue_key] = issue
+    
+    # 将所有去重后的问题收集到一个列表中
+    deduplicated_issues = []
+    for page_issues_dict in page_issues.values():
+        deduplicated_issues.extend(page_issues_dict.values())
+    
+    return deduplicated_issues

@@ -83,13 +83,41 @@ MD_TEMPLATE = Template(
 
 def render_markdown(issues: List[Issue]) -> str:
     """生成Markdown格式的审查报告"""
+    # 去重：同一页中同一个问题只出现一次
+    deduplicated_issues = _deduplicate_issues_by_page(issues)
+    
     # 区分规则检查和LLM审查的问题
-    rule_issues = [it for it in issues if not it.rule_id.startswith("LLM_")]
-    llm_issues = [it for it in issues if it.rule_id.startswith("LLM_")]
+    rule_issues = [it for it in deduplicated_issues if not it.rule_id.startswith("LLM_")]
+    llm_issues = [it for it in deduplicated_issues if it.rule_id.startswith("LLM_")]
     
     return MD_TEMPLATE.render(
-        issues=issues,
+        issues=deduplicated_issues,
         rule_issues=rule_issues,
         llm_issues=llm_issues
     )
+
+
+def _deduplicate_issues_by_page(issues: List[Issue]) -> List[Issue]:
+    """去重：同一页中同一个问题只出现一次"""
+    # 使用字典来跟踪每个页面中已经出现的问题
+    page_issues = {}  # {page_index: {issue_key: issue}}
+    
+    for issue in issues:
+        page_index = issue.slide_index
+        # 创建问题的唯一标识：rule_id + message的前50个字符
+        issue_key = f"{issue.rule_id}:{issue.message[:50]}"
+        
+        if page_index not in page_issues:
+            page_issues[page_index] = {}
+        
+        # 如果该页面还没有这个问题，则添加
+        if issue_key not in page_issues[page_index]:
+            page_issues[page_index][issue_key] = issue
+    
+    # 将所有去重后的问题收集到一个列表中
+    deduplicated_issues = []
+    for page_issues_dict in page_issues.values():
+        deduplicated_issues.extend(page_issues_dict.values())
+    
+    return deduplicated_issues
 

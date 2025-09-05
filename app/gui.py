@@ -119,8 +119,28 @@ class SimpleApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("PPT审查工具")
-        self.geometry("800x1100")
+        
+        # 获取屏幕尺寸并计算合适的窗口大小
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        
+        # 计算窗口大小：屏幕宽度的80%，高度的85%，但不超过1200x900
+        window_width = min(int(screen_width * 0.8), 1200)
+        window_height = min(int(screen_height * 0.85), 900)
+        
+        # 确保最小尺寸
+        window_width = max(window_width, 800)
+        window_height = max(window_height, 600)
+        
+        # 居中显示
+        x = (screen_width - window_width) // 2
+        y = (screen_height - window_height) // 2
+        
+        self.geometry(f"{window_width}x{window_height}+{x}+{y}")
         self.resizable(True, True)
+        
+        # 设置最小窗口大小
+        self.minsize(800, 600)
         
         # 设置更好的字体
         self._setup_fonts()
@@ -170,30 +190,30 @@ class SimpleApp(tk.Tk):
 
     def _build_ui(self):
         """构建UI界面"""
-        # 主框架
-        main_frame = ttk.Frame(self, padding="15")
+        # 创建主容器
+        main_frame = ttk.Frame(self, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # 标题
         title_label = ttk.Label(main_frame, text="PPT审查工具", font=self.title_font)
-        title_label.pack(pady=(0, 25))
+        title_label.pack(pady=(0, 20))
         
-        # 文件选择区域
-        file_frame = ttk.LabelFrame(main_frame, text="文件选择", padding="15")
+        # 区域1：文件上传窗口
+        file_frame = ttk.LabelFrame(main_frame, text="📁 文件上传窗口", padding="15")
         file_frame.pack(fill=tk.X, pady=(0, 15))
         
         # PPT文件选择
         ppt_frame = ttk.Frame(file_frame)
         ppt_frame.pack(fill=tk.X, pady=8)
         ttk.Label(ppt_frame, text="PPT文件:", width=12).pack(side=tk.LEFT)
-        ttk.Entry(ppt_frame, textvariable=self.input_ppt, width=50).pack(side=tk.LEFT, padx=8, fill=tk.X, expand=True)
+        ttk.Entry(ppt_frame, textvariable=self.input_ppt).pack(side=tk.LEFT, padx=(8, 8), fill=tk.X, expand=True)
         ttk.Button(ppt_frame, text="选择", command=self._select_ppt, width=10).pack(side=tk.LEFT)
         
         # 输出目录选择
         output_frame = ttk.Frame(file_frame)
         output_frame.pack(fill=tk.X, pady=8)
         ttk.Label(output_frame, text="输出目录:", width=12).pack(side=tk.LEFT)
-        ttk.Entry(output_frame, textvariable=self.output_dir, width=50).pack(side=tk.LEFT, padx=8, fill=tk.X, expand=True)
+        ttk.Entry(output_frame, textvariable=self.output_dir).pack(side=tk.LEFT, padx=(8, 8), fill=tk.X, expand=True)
         ttk.Button(output_frame, text="选择", command=self._select_output_dir, width=10).pack(side=tk.LEFT)
         
         # 运行模式
@@ -202,10 +222,10 @@ class SimpleApp(tk.Tk):
         ttk.Label(mode_frame, text="运行模式:", width=12).pack(side=tk.LEFT)
         mode_combo = ttk.Combobox(mode_frame, textvariable=self.mode, values=["review", "edit"], 
                                  state="readonly", width=20)
-        mode_combo.pack(side=tk.LEFT, padx=8)
+        mode_combo.pack(side=tk.LEFT, padx=(8, 0))
         
-        # LLM配置区域
-        llm_frame = ttk.LabelFrame(main_frame, text="LLM配置", padding="15")
+        # 区域2：LLM配置窗口
+        llm_frame = ttk.LabelFrame(main_frame, text="🤖 LLM配置窗口", padding="15")
         llm_frame.pack(fill=tk.X, pady=(0, 15))
         
         # 启用LLM
@@ -220,7 +240,7 @@ class SimpleApp(tk.Tk):
         provider_combo = ttk.Combobox(provider_frame, textvariable=self.llm_provider, 
                                      values=["deepseek", "openai", "anthropic", "local"], 
                                      state="readonly", width=20)
-        provider_combo.pack(side=tk.LEFT, padx=8)
+        provider_combo.pack(side=tk.LEFT, padx=(8, 0))
         provider_combo.bind('<<ComboboxSelected>>', self._on_provider_change)
         
         # 模型选择
@@ -229,47 +249,54 @@ class SimpleApp(tk.Tk):
         ttk.Label(model_frame, text="模型:", width=12).pack(side=tk.LEFT)
         self.model_combo = ttk.Combobox(model_frame, textvariable=self.llm_model, 
                                        state="readonly", width=20)
-        self.model_combo.pack(side=tk.LEFT, padx=8)
+        self.model_combo.pack(side=tk.LEFT, padx=(8, 0))
         
         # API密钥
         api_frame = ttk.Frame(llm_frame)
         api_frame.pack(fill=tk.X, pady=8)
         ttk.Label(api_frame, text="API密钥:", width=12).pack(side=tk.LEFT)
-        # API密钥输入框可编辑，支持实时修改
-        api_entry = ttk.Entry(api_frame, textvariable=self.llm_api_key, width=50, show="*")
-        api_entry.pack(side=tk.LEFT, padx=8, fill=tk.X, expand=True)
-        # 添加实时更新按钮
-        ttk.Button(api_frame, text="应用", command=self._apply_api_key, width=8).pack(side=tk.LEFT, padx=(10, 0))
-        # 添加提示标签
-        ttk.Label(api_frame, text="", foreground="blue").pack(side=tk.LEFT, padx=(5, 0))
+        api_entry = ttk.Entry(api_frame, textvariable=self.llm_api_key, show="*")
+        api_entry.pack(side=tk.LEFT, padx=(8, 8), fill=tk.X, expand=True)
+        ttk.Button(api_frame, text="应用", command=self._apply_api_key, width=10).pack(side=tk.LEFT)
         
         # 初始化模型列表
         self._update_model_list()
         
-        # 运行按钮
-        run_frame = ttk.Frame(main_frame)
-        run_frame.pack(pady=25)
-        self.run_button = ttk.Button(run_frame, text="开始审查", command=self._run_review, 
-                                    width=25)
-        self.run_button.pack()
+        # 区域3：开始运行按钮
+        run_frame = ttk.LabelFrame(main_frame, text="▶️ 开始运行按钮", padding="10")
+        run_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        # 运行按钮 - 更大的按钮
+        self.run_button = ttk.Button(run_frame, text="🚀 开始审查", command=self._run_review, 
+                                    width=30)
+        self.run_button.pack(pady=8)
         
         # 状态栏
         self.status_var = tk.StringVar(value="就绪")
-        status_label = ttk.Label(main_frame, textvariable=self.status_var, anchor=tk.W)
-        status_label.pack(fill=tk.X, pady=(15, 0))
+        status_label = ttk.Label(run_frame, textvariable=self.status_var, anchor=tk.W)
+        status_label.pack(fill=tk.X, pady=(5, 0))
         
-        # 日志区域
-        log_frame = ttk.LabelFrame(main_frame, text="运行日志", padding="10")
-        log_frame.pack(fill=tk.BOTH, expand=True, pady=(15, 0))
+        # 区域4：LOG日志窗口
+        log_frame = ttk.LabelFrame(main_frame, text="📋 LOG日志窗口", padding="10")
+        log_frame.pack(fill=tk.BOTH, expand=True)
         
-        # 添加日志控制按钮
+        # 日志控制按钮
         log_control_frame = ttk.Frame(log_frame)
         log_control_frame.pack(fill=tk.X, pady=(0, 10))
-        ttk.Button(log_control_frame, text="清空日志", command=self._clear_log, width=10).pack(side=tk.LEFT)
-        ttk.Button(log_control_frame, text="保存日志", command=self._save_log, width=10).pack(side=tk.LEFT, padx=(10, 0))
         
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=15, wrap=tk.WORD, font=self.log_font)
+        ttk.Button(log_control_frame, text="清空日志", command=self._clear_log, width=12).pack(side=tk.LEFT)
+        ttk.Button(log_control_frame, text="保存日志", command=self._save_log, width=12).pack(side=tk.LEFT, padx=(10, 0))
+        
+        # 日志文本框
+        self.log_text = scrolledtext.ScrolledText(
+            log_frame, 
+            wrap=tk.WORD, 
+            font=self.log_font,
+            height=20,
+            width=80
+        )
         self.log_text.pack(fill=tk.BOTH, expand=True)
+
 
     def _select_ppt(self):
         """选择PPT文件"""
