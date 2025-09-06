@@ -18,9 +18,42 @@ try:
     import yaml
 except ImportError:
     import PyYAML as yaml
+
+# 导入Rich库用于终端颜色输出
+try:
+    from rich.console import Console
+    # from rich.text import Text  # 暂时不使用
+    RICH_AVAILABLE = True
+    # 创建全局Rich控制台实例
+    console = Console()
+except ImportError:
+    RICH_AVAILABLE = False
+    console = None
+    print("⚠️ Rich库未安装，终端输出将无颜色")
+
+def colored_print(message, level='info'):
+    """颜色化的print函数，同时输出到终端和GUI"""
+    if RICH_AVAILABLE and console:
+        # 根据级别选择Rich颜色
+        colors = {
+            'info': 'white',
+            'success': 'green',
+            'warning': 'yellow',
+            'error': 'red',
+            'debug': 'dim',
+            'highlight': 'blue'
+        }
+        
+        color = colors.get(level, 'white')
+        
+        # 使用Rich输出带颜色的文本
+        console.print(message, style=color)
+    else:
+        # 如果Rich不可用，使用普通print
+        print(message)
 from datetime import datetime
 import io
-import contextlib
+# import contextlib  # 暂时不使用
 
 def get_resource_path(relative_path):
     """获取资源文件的绝对路径，兼容开发环境和打包环境"""
@@ -45,43 +78,45 @@ from pptlint.workflow import run_review_workflow
 from pptlint.llm import LLMClient
 from pptlint.parser import parse_pptx
 from pptlint.cli import generate_output_paths
-print("✅ 使用绝对导入模式")
+colored_print("✅ 使用绝对导入模式", 'success')
 
 
 
 class ConsoleCapture:
-    """控制台输出捕获器"""
+    """控制台输出捕获器 - 完全避免递归调用"""
     def __init__(self, log_callback):
         self.log_callback = log_callback
         self.original_stdout = sys.stdout
         self.original_stderr = sys.stderr
-        self.stdout_buffer = io.StringIO()
-        self.stderr_buffer = io.StringIO()
+        self._capturing = False
     
     def __enter__(self):
-        # 创建自定义的输出流，实时回调
-        class RealTimeStream:
-            def __init__(self, original_stream, callback, prefix=""):
+        self._capturing = True
+        
+        # 创建完全安全的输出流
+        class SafeStream:
+            def __init__(self, original_stream, callback, capture_instance):
                 self.original_stream = original_stream
                 self.callback = callback
-                self.prefix = prefix
-                self.buffer = ""
+                self.capture_instance = capture_instance
             
             def write(self, text):
-                # 安全写入原始流
+                # 直接写入原始流，不使用任何可能触发递归的函数
                 try:
                     if self.original_stream and hasattr(self.original_stream, 'write'):
                         self.original_stream.write(text)
-                except Exception as e:
-                    # 如果原始流写入失败，忽略错误
+                except Exception:
                     pass
                 
-                # 实时回调到GUI
+                # 安全回调到GUI（完全避免递归）
                 try:
-                    if self.callback:
+                    if (self.capture_instance._capturing and 
+                        self.callback and 
+                        text and 
+                        text.strip()):  # 只处理非空文本
+                        # 直接调用回调，不使用print或其他可能触发递归的函数
                         self.callback(text)
-                except Exception as e:
-                    # 如果回调失败，忽略错误
+                except Exception:
                     pass
             
             def flush(self):
@@ -95,24 +130,14 @@ class ConsoleCapture:
                 pass
         
         # 替换标准输出和错误流
-        sys.stdout = RealTimeStream(self.original_stdout, self.log_callback)
-        sys.stderr = RealTimeStream(self.original_stderr, lambda x: self.log_callback(f"错误: {x}"))
+        sys.stdout = SafeStream(self.original_stdout, self.log_callback, self)
+        sys.stderr = SafeStream(self.original_stderr, lambda x: self.log_callback(f"错误: {x}"), self)
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self._capturing = False
         sys.stdout = self.original_stdout
         sys.stderr = self.original_stderr
-        # 安全关闭缓冲区
-        try:
-            if hasattr(self, 'stdout_buffer') and self.stdout_buffer:
-                self.stdout_buffer.close()
-        except Exception:
-            pass
-        try:
-            if hasattr(self, 'stderr_buffer') and self.stderr_buffer:
-                self.stderr_buffer.close()
-        except Exception:
-            pass
 
 
 class SimpleApp(tk.Tk):
@@ -142,8 +167,9 @@ class SimpleApp(tk.Tk):
         # 设置最小窗口大小
         self.minsize(800, 600)
         
-        # 设置更好的字体
+        # 设置更好的字体和颜色主题
         self._setup_fonts()
+        self._setup_colors()
         
         # 配置变量
         self.input_ppt = tk.StringVar()
@@ -204,15 +230,15 @@ class SimpleApp(tk.Tk):
             try:
                 # 方法1：尝试使用不同的主题
                 available_themes = style.theme_names()
-                print(f"可用主题: {available_themes}")
+                colored_print(f"可用主题: {available_themes}", 'info')
                 
                 # 尝试使用alt主题，它通常有更好的复选框样式
                 if 'alt' in available_themes:
                     style.theme_use('alt')
-                    print("✅ 使用alt主题")
+                    colored_print("✅ 使用alt主题", 'success')
                 elif 'default' in available_themes:
                     style.theme_use('default')
-                    print("✅ 使用default主题")
+                    colored_print("✅ 使用default主题", 'success')
                 
                 # 重新配置复选框样式
                 style.configure('TCheckbutton', font=default_font)
@@ -224,18 +250,110 @@ class SimpleApp(tk.Tk):
                          background=[('active', 'white'),
                                    ('!active', 'white')])
                 
-                print("✅ 复选框样式修改完成")
+                colored_print("✅ 复选框样式修改完成", 'success')
                 
             except Exception as e:
-                print(f"⚠️ 复选框样式修改失败: {e}")
+                colored_print(f"⚠️ 复选框样式修改失败: {e}", 'warning')
             
-            print("使用Ubuntu优化字体设置")
+            colored_print("使用Ubuntu优化字体设置", 'info')
                 
         except Exception as e:
-            print(f"字体设置失败: {e}")
+            colored_print(f"字体设置失败: {e}", 'error')
             # 使用系统默认字体
             self.title_font = ('TkHeadingFont', 12, 'bold')
             self.log_font = ('TkFixedFont', 8)
+    
+    def _setup_colors(self):
+        """设置界面颜色主题"""
+        try:
+            # 定义颜色主题
+            self.colors = {
+                'primary': '#2E86AB',      # 主色调 - 蓝色
+                'secondary': '#A23B72',    # 辅助色 - 紫红色
+                'success': '#F18F01',      # 成功色 - 橙色
+                'warning': '#C73E1D',      # 警告色 - 红色
+                'info': '#6A994E',         # 信息色 - 绿色
+                'light': '#F8F9FA',        # 浅色背景
+                'dark': '#212529',         # 深色文字
+                'border': '#DEE2E6',       # 边框色
+                'hover': '#E9ECEF'         # 悬停色
+            }
+            
+            # 设置窗口背景色
+            self.configure(bg=self.colors['light'])
+            
+            # 配置ttk样式
+            style = ttk.Style()
+            
+            # 配置LabelFrame样式
+            style.configure('TLabelframe', 
+                          background=self.colors['light'],
+                          borderwidth=2,
+                          relief='solid')
+            style.configure('TLabelframe.Label', 
+                          background=self.colors['light'],
+                          foreground=self.colors['dark'],
+                          font=self.title_font)
+            
+            # 配置按钮样式
+            style.configure('TButton',
+                          background=self.colors['primary'],
+                          foreground='white',
+                          font=self.title_font,
+                          borderwidth=1,
+                          relief='solid')
+            style.map('TButton',
+                     background=[('active', self.colors['secondary']),
+                               ('pressed', self.colors['warning'])])
+            
+            # 配置复选框样式
+            style.configure('TCheckbutton',
+                          background=self.colors['light'],
+                          foreground=self.colors['dark'],
+                          font=self.title_font)
+            style.map('TCheckbutton',
+                     background=[('active', self.colors['hover']),
+                               ('!active', self.colors['light'])],
+                     foreground=[('active', self.colors['primary']),
+                               ('!active', self.colors['dark'])])
+            
+            # 配置输入框样式
+            style.configure('TEntry',
+                          fieldbackground='white',
+                          foreground=self.colors['dark'],
+                          borderwidth=1,
+                          relief='solid')
+            
+            # 配置Spinbox样式
+            style.configure('TSpinbox',
+                          fieldbackground='white',
+                          foreground=self.colors['dark'],
+                          borderwidth=1,
+                          relief='solid')
+            
+            # 配置Combobox样式
+            style.configure('TCombobox',
+                          fieldbackground='white',
+                          foreground=self.colors['dark'],
+                          borderwidth=1,
+                          relief='solid')
+            
+            colored_print("✅ 颜色主题设置完成", 'success')
+            
+        except Exception as e:
+            colored_print(f"颜色设置失败: {e}", 'error')
+            # 使用默认颜色
+            self.colors = {
+                'primary': '#007ACC',
+                'secondary': '#6C757D',
+                'success': '#28A745',
+                'warning': '#FFC107',
+                'info': '#17A2B8',
+                'light': '#FFFFFF',
+                'dark': '#000000',
+                'border': '#CCCCCC',
+                'hover': '#F5F5F5'
+            }
 
     def _build_ui(self):
         """构建UI界面"""
@@ -325,12 +443,12 @@ class SimpleApp(tk.Tk):
         button_frame = ttk.Frame(run_frame)
         button_frame.pack(pady=2)
         
-        # 开始审查按钮
+        # 开始审查按钮 - 美化版本
         self.run_button = ttk.Button(button_frame, text="🚀 开始审查", command=self._run_review, 
                                     width=15)
         self.run_button.pack(side=tk.LEFT, padx=(0, 5))
         
-        # 终止按钮
+        # 终止按钮 - 美化版本
         self.stop_button = ttk.Button(button_frame, text="⏹️ 终止", command=self._stop_review, 
                                      width=15, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=(5, 0))
@@ -348,18 +466,34 @@ class SimpleApp(tk.Tk):
         log_control_frame = ttk.Frame(log_frame)
         log_control_frame.pack(fill=tk.X, pady=(0, 10))
         
-        ttk.Button(log_control_frame, text="清空日志", command=self._clear_log, width=12).pack(side=tk.LEFT)
-        ttk.Button(log_control_frame, text="保存日志", command=self._save_log, width=12).pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Button(log_control_frame, text="🗑️ 清空日志", command=self._clear_log, width=12).pack(side=tk.LEFT)
+        ttk.Button(log_control_frame, text="💾 保存日志", command=self._save_log, width=12).pack(side=tk.LEFT, padx=(10, 0))
         
-        # 日志文本框
+        # 日志文本框 - 美化版本
         self.log_text = scrolledtext.ScrolledText(
             log_frame, 
             wrap=tk.WORD, 
             font=self.log_font,
             height=20,
-            width=80
+            width=80,
+            bg='#1E1E1E',  # 深色背景
+            fg='#FFFFFF',  # 白色文字
+            insertbackground='#FFFFFF',  # 光标颜色
+            selectbackground='#404040',  # 选中背景
+            selectforeground='#FFFFFF',  # 选中文字
+            relief='solid',
+            borderwidth=1
         )
         self.log_text.pack(fill=tk.BOTH, expand=True)
+        
+        # 配置默认文本颜色标签
+        self.log_text.tag_config("default", foreground='#FFFFFF')
+        self.log_text.tag_config("log_info", foreground='#FFFFFF')
+        self.log_text.tag_config("log_success", foreground='#4CAF50')
+        self.log_text.tag_config("log_warning", foreground='#FF9800')
+        self.log_text.tag_config("log_error", foreground='#F44336')
+        self.log_text.tag_config("log_debug", foreground='#9E9E9E')
+        self.log_text.tag_config("log_highlight", foreground='#2196F3')
 
     def _create_review_settings(self, parent):
         """创建审查设置 - 清晰整齐的等宽布局"""
@@ -566,35 +700,46 @@ class SimpleApp(tk.Tk):
             self._log(f"❌ 加载配置失败: {e}")
         
         # 启动时显示欢迎日志
-        self._log("🚀 PPT审查工具已启动")
-        self._log("📋 当前配置:")
-        self._log(f"   - LLM提供商: {self.llm_provider.get()}")
-        self._log(f"   - 模型: {self.llm_model.get()}")
-        self._log(f"   - LLM启用: {'是' if self.llm_enabled.get() else '否'}")
-        self._log(f"   - API密钥: {self.llm_api_key.get()[:10]}...")
-        self._log("💡 请选择PPT文件开始审查")
-        self._log("-" * 50)
+        self._log("🚀 PPT审查工具已启动", 'success')
+        self._log("📋 当前配置:", 'highlight')
+        self._log(f"   - LLM提供商: {self.llm_provider.get()}", 'info')
+        self._log(f"   - 模型: {self.llm_model.get()}", 'info')
+        self._log(f"   - LLM启用: {'是' if self.llm_enabled.get() else '否'}", 'info')
+        self._log(f"   - API密钥: {self.llm_api_key.get()[:10]}...", 'info')
+        self._log("💡 请选择PPT文件开始审查", 'highlight')
+        self._log("-" * 50, 'debug')
+        
+        # 同时在终端输出欢迎信息（避免递归）
+        if RICH_AVAILABLE and console:
+            console.print("🚀 PPT审查工具已启动", style="green")
+            console.print("📋 当前配置:", style="blue")
+            console.print(f"   - LLM提供商: {self.llm_provider.get()}", style="white")
+            console.print(f"   - 模型: {self.llm_model.get()}", style="white")
+            console.print(f"   - LLM启用: {'是' if self.llm_enabled.get() else '否'}", style="white")
+            console.print(f"   - API密钥: {self.llm_api_key.get()[:10]}...", style="white")
+            console.print("💡 请选择PPT文件开始审查", style="blue")
+            console.print("-" * 50, style="dim")
 
     def _stop_review(self):
         """终止审查"""
         if self.is_running:
             self.should_stop = True
             self.stop_event.set()  # 设置停止事件
-            self._log("⏹️ 用户请求终止审查...")
+            self._log("⏹️ 用户请求终止审查...", 'warning')
             self.status_var.set("正在终止...")
             
             # 强制终止工作线程（如果存在）
             if self.worker_thread and self.worker_thread.is_alive():
-                self._log("🔄 正在强制终止工作线程...")
+                self._log("🔄 正在强制终止工作线程...", 'warning')
                 # 注意：在Windows上，强制终止线程可能不安全，但这是最后的 resort
                 try:
                     import ctypes
                     thread_id = self.worker_thread.ident
                     if thread_id:
                         ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(thread_id), ctypes.py_object(KeyboardInterrupt))
-                        self._log("✅ 工作线程已强制终止")
+                        self._log("✅ 工作线程已强制终止", 'success')
                 except Exception as e:
-                    self._log(f"⚠️ 强制终止失败: {e}")
+                    self._log(f"⚠️ 强制终止失败: {e}", 'error')
             
             # 按钮状态会在_run_review方法中更新
         else:
@@ -787,15 +932,35 @@ class SimpleApp(tk.Tk):
             except Exception as e:
                 print(f"无法打开目录: {e}")
 
-    def _log(self, message):
-        """添加日志消息"""
+    def _log(self, message, level='info'):
+        """添加彩色日志消息"""
         # 如果消息以换行符结尾，则移除它（因为print会自动添加）
         if message.endswith('\n'):
             message = message[:-1]
         
-        # 插入消息并换行
+        # 根据级别选择颜色
+        colors = {
+            'info': '#FFFFFF',      # 白色 - 普通信息
+            'success': '#4CAF50',   # 绿色 - 成功
+            'warning': '#FF9800',   # 橙色 - 警告
+            'error': '#F44336',     # 红色 - 错误
+            'debug': '#9E9E9E',     # 灰色 - 调试
+            'highlight': '#2196F3'  # 蓝色 - 高亮
+        }
+        
+        # 获取当前颜色
+        color = colors.get(level, colors['info'])
+        
+        # 插入带颜色的消息
         self.log_text.insert(tk.END, f"{message}\n")
-        self.log_text.see(tk.END)
+        
+        # 设置最后插入的文本的颜色
+        start_line = self.log_text.index(tk.END + "-2l")
+        end_line = self.log_text.index(tk.END + "-1l")
+        self.log_text.tag_add(f"log_{level}", start_line, end_line)
+        self.log_text.tag_config(f"log_{level}", foreground=color, font=self.log_font)
+        
+        self.log_text.see(tk.END)  # 自动滚动到底部
         self.update_idletasks()
 
     def _clear_log(self):

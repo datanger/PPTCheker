@@ -73,7 +73,7 @@ def run_review_workflow(parsing_result_path: str, cfg: ToolConfig, output_ppt: O
     
     # 步骤4：LLM审查（抽取为公共函数）
     print("🤖 运行LLM审查...")
-    llm_issues = _perform_llm_review(parsing_data, cfg, llm)
+    llm_issues = _perform_llm_review(parsing_data, cfg, llm, stop_event)
     
     # 合并所有问题
     all_issues = rule_issues + llm_issues
@@ -106,7 +106,7 @@ def run_review_workflow(parsing_result_path: str, cfg: ToolConfig, output_ppt: O
     return res
 
 
-def _perform_llm_review(parsing_data, cfg: ToolConfig, llm: Optional[LLMClient]) -> List[Issue]:
+def _perform_llm_review(parsing_data, cfg: ToolConfig, llm: Optional[LLMClient], stop_event: Optional[object] = None) -> List[Issue]:
     """公共：基于 parsing_result.json 调用LLM进行多维度审查并返回问题列表。"""
     issues: List[Issue] = []
     
@@ -125,7 +125,7 @@ def _perform_llm_review(parsing_data, cfg: ToolConfig, llm: Optional[LLMClient])
         # 检查是否应该停止
         if stop_event and stop_event.is_set():
             print("⏹️ 用户请求终止，停止LLM审查")
-            return res
+            return issues
         
         if cfg.review_logic:
             print("🤖 开始内容逻辑审查...")
@@ -138,7 +138,7 @@ def _perform_llm_review(parsing_data, cfg: ToolConfig, llm: Optional[LLMClient])
         # 检查是否应该停止
         if stop_event and stop_event.is_set():
             print("⏹️ 用户请求终止，停止LLM审查")
-            return res
+            return issues
         
         if cfg.review_acronyms:
             print("🤖 开始缩略语审查...")
@@ -151,7 +151,7 @@ def _perform_llm_review(parsing_data, cfg: ToolConfig, llm: Optional[LLMClient])
         # 检查是否应该停止
         if stop_event and stop_event.is_set():
             print("⏹️ 用户请求终止，停止LLM审查")
-            return res
+            return issues
         
         if cfg.review_fluency:
             print("🤖 开始标题结构审查...")
