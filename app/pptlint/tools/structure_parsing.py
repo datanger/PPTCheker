@@ -34,7 +34,7 @@ def load_parsing_result(path: str = "parsing_result.json") -> List[Dict[str, Any
         return json.load(f)
 
 
-def infer_all_structures(slides_data: List[Dict[str, Any]], llm: Optional[LLMClient] = None) -> Dict[str, Any]:
+def infer_all_structures(slides_data: List[Dict[str, Any]], llm: Optional[LLMClient] = None, stop_event: Optional[object] = None) -> Dict[str, Any]:
     """一次性向大模型询问并返回：题目、目录页、章节划分、每页标题。
     返回：{"topic": str, "contents": [int], "sections": [{"title": str, "pages": [int]}], "titles": [str]}
     """
@@ -76,15 +76,49 @@ def infer_all_structures(slides_data: List[Dict[str, Any]], llm: Optional[LLMCli
 
 
     print(f"🔍 开始LLM调用: provider={llm.provider}, model={llm.model}, max_tokens={llm.max_tokens}")
-    raw = llm.complete(prompt)
+    raw = llm.complete(prompt, stop_event=stop_event)
+    
+    # 检查LLM响应是否为空
+    if not raw or not raw.strip():
+        print(f"❌ LLM返回空响应")
+        return {}
+    
+    print(f"📥 收到LLM响应，长度: {len(raw)} 字符")
+    print(f"📄 响应前200字符: {raw[:200]}...")
+    
+    try:
+        data = json.loads(raw)
+        print(f"✅ JSON解析成功")
+        return data
+    except json.JSONDecodeError as e:
+        print(f"❌ JSON解析失败: {e}")
+        print(f"📄 原始响应内容:")
+        print(f"{raw}")
+        
+        # 尝试清理响应
+        cleaned_response = raw.strip()
+        # 移除可能的markdown代码块标记
+        if cleaned_response.startswith("```json"):
+            cleaned_response = cleaned_response[7:]
+        if cleaned_response.endswith("```"):
+            cleaned_response = cleaned_response[:-3]
+        cleaned_response = cleaned_response.strip()
+        
+        print(f"🧹 清理后响应:")
+        print(f"{cleaned_response}")
+        
+        try:
+            data = json.loads(cleaned_response)
+            print(f"✅ 清理后JSON解析成功")
+            return data
+        except json.JSONDecodeError as e2:
+            print(f"❌ 清理后JSON解析仍然失败: {e2}")
+            return {}
 
-    data = json.loads(raw)
-    return data
 
 
 
-
-def analyze_from_parsing_result(parsing_data: Dict[str, Any], llm: Optional[LLMClient] = None) -> Dict[str, Any]:
+def analyze_from_parsing_result(parsing_data: Dict[str, Any], llm: Optional[LLMClient] = None, stop_event: Optional[object] = None) -> Dict[str, Any]:
     """一站式：加载parser结果 → 调一次LLM返回题目/目录/章节/每页标题。
     返回：{"topic": str, "contents": [...], "sections": [...], "titles": [...], "structure": str, "page_types": [...], "page_titles": [...]}。
     完全依赖大模型分析，无规则法回退。"""
@@ -93,7 +127,7 @@ def analyze_from_parsing_result(parsing_data: Dict[str, Any], llm: Optional[LLMC
     if not slides_data:
         return parsing_data
     
-    llm_all = infer_all_structures(slides_data, llm)
+    llm_all = infer_all_structures(slides_data, llm, stop_event)
     
     # 生成PPT结构汇总字符串
     structure_lines = []

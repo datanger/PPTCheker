@@ -51,7 +51,7 @@ class LLMClient:
             env_key = f"{provider.upper()}_API_KEY"
             self.api_key = os.getenv(env_key, "")
 
-    def complete(self, prompt: str, max_tokens: Optional[int] = None) -> str:
+    def complete(self, prompt: str, max_tokens: Optional[int] = None, stop_event: Optional[object] = None) -> str:
         try:
             if not self.api_key:
                 print("未配置API密钥，LLM功能将不可用")
@@ -74,11 +74,16 @@ class LLMClient:
             
             data = json.dumps(body).encode("utf-8")
             
-            # 增加超时时间，并添加重试机制
-            timeout = 60  # 增加到60秒
-            max_retries = 2
+            # 使用短超时和轮询机制来支持中断
+            timeout = 5  # 短超时，5秒
+            max_retries = 24  # 最多重试24次，总共2分钟
             
             for attempt in range(max_retries + 1):
+                # 检查是否应该停止
+                if stop_event and stop_event.is_set():
+                    print("⏹️ LLM调用被用户终止")
+                    return ""
+                
                 try:
                     with urllib.request.urlopen(req, data=data, timeout=timeout) as resp:
                         payload = json.loads(resp.read().decode("utf-8"))
@@ -87,6 +92,10 @@ class LLMClient:
                 except urllib.error.URLError as e:
                     if "timeout" in str(e).lower() and attempt < max_retries:
                         print(f"LLM请求超时，第{attempt + 1}次重试...")
+                        # 在重试前检查是否应该停止
+                        if stop_event and stop_event.is_set():
+                            print("⏹️ LLM调用被用户终止")
+                            return ""
                         continue
                     else:
                         raise e

@@ -28,15 +28,167 @@ class LLMReviewer:
     def __init__(self, llm: LLMClient, config: ToolConfig):
         self.llm = llm
         self.config = config
+        self.stop_event = None  # 停止事件
+        # 导入提示词管理器
+        try:
+            from ..prompt_manager import prompt_manager
+            self.prompt_manager = prompt_manager
+        except ImportError:
+            self.prompt_manager = None
+    
+    def set_stop_event(self, stop_event):
+        """设置停止事件"""
+        self.stop_event = stop_event
     
     def _clean_json_response(self, response: str) -> str:
-        """清理LLM响应中的markdown代码块标记"""
+        """清理LLM响应中的markdown代码块标记和其他格式问题"""
+        if not response or not response.strip():
+            return ""
+            
         cleaned_response = response.strip()
+        
+        # 移除markdown代码块标记
         if cleaned_response.startswith('```json'):
             cleaned_response = cleaned_response[7:]
+        elif cleaned_response.startswith('```'):
+            cleaned_response = cleaned_response[3:]
+            
         if cleaned_response.endswith('```'):
             cleaned_response = cleaned_response[:-3]
+            
+        cleaned_response = cleaned_response.strip()
+        
+        # 移除可能的其他前缀
+        prefixes_to_remove = [
+            "JSON格式：",
+            "JSON:",
+            "json:",
+            "返回结果：",
+            "结果：",
+            "Response:",
+            "response:",
+        ]
+        
+        for prefix in prefixes_to_remove:
+            if cleaned_response.startswith(prefix):
+                cleaned_response = cleaned_response[len(prefix):].strip()
+                break
+        
+        # 查找JSON对象的开始和结束
+        start_idx = cleaned_response.find('{')
+        end_idx = cleaned_response.rfind('}')
+        
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            cleaned_response = cleaned_response[start_idx:end_idx + 1]
+        
         return cleaned_response.strip()
+    
+    def _get_default_format_prompt(self, pages: List[Dict[str, Any]]) -> str:
+        """获取默认格式审查提示词"""
+        return f"""
+            你是一个专业的PPT格式审查专家。请分析以下PPT内容，检查格式规范问题：
+
+            审查标准：
+            - 日文字体：应使用 {self.config.jp_font_name}
+            - 最小字号：{self.config.min_font_size_pt}pt
+            - 单页颜色数：不超过{self.config.color_count_threshold}种
+
+            PPT内容：
+            {json.dumps(pages, ensure_ascii=False, indent=2)}
+
+            **重要**：请为每个问题提供页面级别的对象引用，格式如下：
+            - 如果问题影响整个页面：使用 "page_[页码]"
+            - 如果问题在特定文本块中：使用 "text_block_[页码]_[块索引]"
+
+            请以JSON格式返回审查结果，格式如下：
+            {{
+                "issues": [
+                    {{
+                        "rule_id": "LLM_FormatRule",
+                        "severity": "warning|info|serious",
+                        "slide_index": 0,
+                        "object_ref": "page_0",
+                        "message": "问题描述",
+                        "suggestion": "具体建议",
+                        "can_autofix": true|false
+                    }}
+                ]
+            }}
+
+            只返回JSON，不要其他内容。
+            """
+    
+    def _get_default_content_logic_prompt(self, parsing_data: Dict[str, Any]) -> str:
+        """获取默认内容逻辑审查提示词"""
+        return f"""
+            你是一位非常挑剔和严谨的公司高层领导，正在审核下属提交的PPT汇报材料。你的标准极其严格，不容许任何逻辑漏洞、表达不清或结构混乱的问题。
+
+            作为挑剔的领导，请从以下维度严格审查PPT内容：
+
+            **1. 页内逻辑连贯性（极其重要）**
+            - 每页内的标题、要点、图表是否逻辑清晰，层次分明
+            - 页面内容是否围绕核心主题展开，避免无关信息
+            - 要点之间是否有清晰的逻辑关系（并列、递进、因果等）
+            - 是否存在逻辑跳跃、思维混乱的问题
+
+            **2. 跨页逻辑连贯性（极其重要）**
+            - 页面之间的过渡是否自然流畅，避免突兀的跳跃
+            - 标题层级是否合理，章节结构是否清晰
+            - 前后页面是否存在逻辑断层或重复冗余
+            - 整体叙述线索是否清晰，听众能否跟上思路
+            - 跨页的逻辑检查参考structure这个字段, 通过PPT的结构来判断跨页的逻辑是否连贯, 是否没有围绕核心主题展开
+
+            **3. 标题与内容一致性（极其重要）**
+            - 页面标题是否准确反映页面内容
+            - 章节标题是否与内容要点匹配
+            - 是否存在标题与内容不符的问题
+            - 标题层级是否合理，避免混乱
+
+            **4. 术语表达严谨性**
+            - 专业术语使用是否一致，避免同一概念用不同词汇
+            - 表达是否准确清晰，避免模糊不清的表述
+            - 是否存在歧义或容易误解的表达
+            - 特别需要检查语言表达是否符合该语种表达习惯，尤其是日语需要重点关注，若发现不符合表达习惯，则标记为问题
+
+            **5. 内容结构完整性**
+            - 是否遗漏关键信息或重要步骤
+            - 各部分内容是否平衡，重点是否突出
+            - 是否存在内容重复或冗余
+            - **页面内容完整性**：有标题的页面是否包含相应的内容
+            - **空内容页面检查**：是否存在只有标题但内容为空或过少的页面（如只有标题占位符，没有实际内容）
+
+            **审查标准（极其严格）**：
+            - 以挑剔领导的视角，找出任何可能影响汇报效果的问题
+            - 重点关注逻辑连贯性，不容许任何跳跃或混乱
+            - 对表达不清、结构混乱的问题零容忍
+            - 对标题与内容不符的问题零容忍
+            - **对空内容页面零容忍**：有标题但内容为空或过少的页面是严重问题
+
+            **重要**：请为每个问题提供精确的对象引用，格式如下：
+            - 如果问题影响整个页面：使用 "page_[页码]"
+            - 如果问题在特定文本块中：使用 "text_block_[页码]_[块索引]"
+            - 如果问题涉及标题：使用 "title_[页码]"
+
+            PPT完整数据：
+            {json.dumps(parsing_data, ensure_ascii=False, indent=2)}
+
+            请以JSON格式返回审查结果，格式如下：
+            {{
+                "issues": [
+                    {{
+                        "rule_id": "LLM_ContentRule",
+                        "severity": "warning|info|serious",
+                        "slide_index": 1（注意：页码从1开始计数）,
+                        "object_ref": "page_1（注意：页码从1开始计数）",
+                        "message": "问题描述（要具体、明确、一针见血）",
+                        "suggestion": "具体建议（要实用、可操作）",
+                        "can_autofix": false
+                    }}
+                ]
+            }}
+
+            只返回JSON，不要其他内容。
+            """
         
     def extract_slide_content(self, doc: DocumentModel) -> List[Dict[str, Any]]:
         """提取幻灯片内容，转换为LLM可理解的格式"""
@@ -101,45 +253,55 @@ class LLMReviewer:
         # 提取页面内容
         pages = parsing_data.get("contents", [])
         
-        prompt = f"""
-            你是一个专业的PPT格式审查专家。请分析以下PPT内容，检查格式规范问题：
+        # 使用提示词管理器获取用户提示词
+        if self.prompt_manager:
+            user_prompt = self.prompt_manager.get_user_prompt_for_review(
+                'format_standards',
+                jp_font_name=self.config.jp_font_name,
+                min_font_size_pt=self.config.min_font_size_pt,
+                color_count_threshold=self.config.color_count_threshold
+            )
+            # 构建完整提示词：用户提示 + 输入提示 + 输出提示
+            prompt = f"""{user_prompt}
 
-            审查标准：
-            - 日文字体：应使用 {self.config.jp_font_name}
-            - 最小字号：{self.config.min_font_size_pt}pt
-            - 单页颜色数：不超过{self.config.color_count_threshold}种
+PPT内容：
+{json.dumps(pages, ensure_ascii=False, indent=2)}
 
-            PPT内容：
-            {json.dumps(pages, ensure_ascii=False, indent=2)}
+**重要**：请为每个问题提供页面级别的对象引用，格式如下：
+- 如果问题影响整个页面：使用 "page_[页码]"
+- 如果问题在特定文本块中：使用 "text_block_[页码]_[块索引]"
 
-            **重要**：请为每个问题提供页面级别的对象引用，格式如下：
-            - 如果问题影响整个页面：使用 "page_[页码]"
-            - 如果问题在特定文本块中：使用 "text_block_[页码]_[块索引]"
+请以JSON格式返回审查结果，格式如下：
+{{
+    "issues": [
+        {{
+            "rule_id": "LLM_FormatRule",
+            "severity": "warning|info|serious",
+            "slide_index": 0,
+            "object_ref": "page_0",
+            "message": "问题描述",
+            "suggestion": "具体建议",
+            "can_autofix": true|false
+        }}
+    ]
+}}
 
-            请以JSON格式返回审查结果，格式如下：
-            {{
-                "issues": [
-                    {{
-                        "rule_id": "LLM_FormatRule",
-                        "severity": "warning|info|serious",
-                        "slide_index": 0,
-                        "object_ref": "page_0",
-                        "message": "问题描述",
-                        "suggestion": "具体建议",
-                        "can_autofix": true|false
-                    }}
-                ]
-            }}
-
-            只返回JSON，不要其他内容。
-            """
+只返回JSON，不要其他内容。"""
+        else:
+            # 回退到默认提示词
+            prompt = self._get_default_format_prompt(pages)
         
         try:
-            response = self.llm.complete(prompt, max_tokens=self.config.llm_max_tokens)
+            response = self.llm.complete(prompt, max_tokens=self.config.llm_max_tokens, stop_event=self.stop_event)
             if response:
                 # 尝试解析JSON响应
                 cleaned_response = self._clean_json_response(response)
-                result = json.loads(cleaned_response)
+                try:
+                    result = json.loads(cleaned_response)
+                except json.JSONDecodeError as e:
+                    print(f"    ❌ JSON解析失败: {e}")
+                    print(f"    📄 清理后的响应: {cleaned_response}")
+                    return []
                 issues = []
                 
                 for item in result.get("issues", []):
@@ -164,76 +326,39 @@ class LLMReviewer:
     def review_content_logic(self, parsing_data: Dict[str, Any]) -> List[Issue]:
         """审查内容逻辑：连贯性、术语一致性、表达流畅性"""
         
-        prompt = f"""
-            你是一位非常挑剔和严谨的公司高层领导，正在审核下属提交的PPT汇报材料。你的标准极其严格，不容许任何逻辑漏洞、表达不清或结构混乱的问题。
+        # 使用提示词管理器获取用户提示词
+        if self.prompt_manager:
+            user_prompt = self.prompt_manager.get_user_prompt_for_review('content_logic')
+            # 构建完整提示词：用户提示 + 输入提示 + 输出提示
+            prompt = f"""{user_prompt}
 
-            作为挑剔的领导，请从以下维度严格审查PPT内容：
+                **重要**：请为每个问题提供精确的对象引用，格式如下：
+                - 如果问题影响整个页面：使用 "page_[页码]"
+                - 如果问题在特定文本块中：使用 "text_block_[页码]_[块索引]"
+                - 如果问题涉及标题：使用 "title_[页码]"
 
-            **1. 页内逻辑连贯性（极其重要）**
-            - 每页内的标题、要点、图表是否逻辑清晰，层次分明
-            - 页面内容是否围绕核心主题展开，避免无关信息
-            - 要点之间是否有清晰的逻辑关系（并列、递进、因果等）
-            - 是否存在逻辑跳跃、思维混乱的问题
+                PPT完整数据：
+                {json.dumps(parsing_data, ensure_ascii=False, indent=2)}
 
-            **2. 跨页逻辑连贯性（极其重要）**
-            - 页面之间的过渡是否自然流畅，避免突兀的跳跃
-            - 标题层级是否合理，章节结构是否清晰
-            - 前后页面是否存在逻辑断层或重复冗余
-            - 整体叙述线索是否清晰，听众能否跟上思路
-            - 跨页的逻辑检查参考structure这个字段, 通过PPT的结构来判断跨页的逻辑是否连贯, 是否没有围绕核心主题展开
+                请以JSON格式返回审查结果，格式如下：
+                {{
+                    "issues": [
+                        {{
+                            "rule_id": "LLM_ContentRule",
+                            "severity": "warning|info|serious",
+                            "slide_index": 1（注意：页码从1开始计数）,
+                            "object_ref": "page_1（注意：页码从1开始计数）",
+                            "message": "问题描述（要具体、明确、一针见血）",
+                            "suggestion": "具体建议（要实用、可操作）",
+                            "can_autofix": false
+                        }}
+                    ]
+                }}
 
-            **3. 标题与内容一致性（极其重要）**
-            - 页面标题是否准确反映页面内容
-            - 章节标题是否与内容要点匹配
-            - 是否存在标题与内容不符的问题
-            - 标题层级是否合理，避免混乱
-
-            **4. 术语表达严谨性**
-            - 专业术语使用是否一致，避免同一概念用不同词汇
-            - 表达是否准确清晰，避免模糊不清的表述
-            - 是否存在歧义或容易误解的表达
-            - 特别需要检查语言表达是否符合该语种表达习惯，尤其是日语需要重点关注，若发现不符合表达习惯，则标记为问题
-
-            **5. 内容结构完整性**
-            - 是否遗漏关键信息或重要步骤
-            - 各部分内容是否平衡，重点是否突出
-            - 是否存在内容重复或冗余
-            - **页面内容完整性**：有标题的页面是否包含相应的内容
-            - **空内容页面检查**：是否存在只有标题但内容为空或过少的页面（如只有标题占位符，没有实际内容）
-
-            **审查标准（极其严格）**：
-            - 以挑剔领导的视角，找出任何可能影响汇报效果的问题
-            - 重点关注逻辑连贯性，不容许任何跳跃或混乱
-            - 对表达不清、结构混乱的问题零容忍
-            - 对标题与内容不符的问题零容忍
-            - **对空内容页面零容忍**：有标题但内容为空或过少的页面是严重问题
-
-            **重要**：请为每个问题提供精确的对象引用，格式如下：
-            - 如果问题影响整个页面：使用 "page_[页码]"
-            - 如果问题在特定文本块中：使用 "text_block_[页码]_[块索引]"
-            - 如果问题涉及标题：使用 "title_[页码]"
-
-            PPT完整数据：
-            {json.dumps(parsing_data, ensure_ascii=False, indent=2)}
-
-
-            请以JSON格式返回审查结果，格式如下：
-            {{
-                "issues": [
-                    {{
-                        "rule_id": "LLM_ContentRule",
-                        "severity": "warning|info|serious",
-                        "slide_index": 1（注意：页码从1开始计数）,
-                        "object_ref": "page_1（注意：页码从1开始计数）",
-                        "message": "问题描述（要具体、明确、一针见血）",
-                        "suggestion": "具体建议（要实用、可操作）",
-                        "can_autofix": false
-                    }}
-                ]
-            }}
-
-            只返回JSON，不要其他内容。
-            """
+                只返回JSON，不要其他内容。"""
+        else:
+            # 回退到默认提示词
+            prompt = self._get_default_content_logic_prompt(parsing_data)
         
         try:
             print(f"    📤 发送LLM内容逻辑审查请求...")
@@ -241,7 +366,7 @@ class LLMReviewer:
             print(f"    🌐 使用端点: {self.llm.endpoint}")
             print(f"    📝 提示词长度: {len(prompt)}")
             
-            response = self.llm.complete(prompt, max_tokens=self.config.llm_max_tokens)
+            response = self.llm.complete(prompt, max_tokens=self.config.llm_max_tokens, stop_event=self.stop_event)
             print(f"    📥 收到LLM响应: {response[:200] if response else 'None'}...")
             print(f"    📏 响应长度: {len(response) if response else 0}")
             print(f"    🔍 响应类型: {type(response)}")
@@ -251,7 +376,12 @@ class LLMReviewer:
             if response and response.strip():
                 try:
                     cleaned_response = self._clean_json_response(response)
-                    result = json.loads(cleaned_response)
+                    try:
+                        result = json.loads(cleaned_response)
+                    except json.JSONDecodeError as e:
+                        print(f"    ❌ JSON解析失败: {e}")
+                        print(f"    📄 清理后的响应: {cleaned_response}")
+                        return []
                     issues = []
                     
                     for item in result.get("issues", []):
@@ -292,66 +422,67 @@ class LLMReviewer:
         # 提取页面内容
         pages = parsing_data.get("contents", [])
         print(f"    🧠 开始缩略语审查，分析 {len(pages)} 个页面...")
-            
-        prompt = f"""
-            你是一个专业的PPT内容审查专家，找到PPT内所有需要解释的缩略语， 只需标记首次出现但未在该页面内解释的缩略语。
+        
+        # 使用提示词管理器获取用户提示词
+        if self.prompt_manager:
+            user_prompt = self.prompt_manager.get_user_prompt_for_review('acronyms')
+            # 构建完整提示词：用户提示 + 输入提示 + 输出提示
+            prompt = f"""{user_prompt}
 
-            审查原则：
-            1. **常见缩略语不需要解释**：如API、URL、HTTP、HTML、CSS、JS、SQL、GUI、CLI、IDE、SDK、CPU、GPU、RAM、USB、WiFi、GPS、TV、DVD、CD、MP3、MP4、PDF、PPT、AI、ML、DL、VR、AR、IoT、CEO、CTO、CFO、HR、IT、PR、QA、UI、UX、PM、USA、UK、EU、UN、WHO、NASA、FBI、CIA、THANKS、OK、FAQ、ASAP、FYI、IMO、BTW、LOL、OMG等
-            
-            2. **基础逻辑词汇不需要解释**：如OR、AND、NOT、IF、THEN、ELSE、FOR、WHILE、LOOP、CASE、SWITCH、TRUE、FALSE、YES、NO、OK、ON、OFF、IN、OUT、UP、DOWN、LEFT、RIGHT、TOP、BOTTOM、START、STOP、BEGIN、END、FIRST、LAST、NEXT、PREV、NEW、OLD、BIG、SMALL、HIGH、LOW、FAST、SLOW、HOT、COLD、GOOD、BAD、BEST、WORST等
-            
-            3. **专业术语缩略语需要解释**：如LLM（Large Language Model）、MCP（Model Context Protocol）、UFO（User-Friendly Operating system）、GraphRAG（Graph-based Retrieval-Augmented Generation）、ADAS（Advanced Driver Assistance Systems）等
-            
-            4. **判断标准**：基于目标读者群体（假设是IT行业专业人士）的知识水平来判断
+                PPT内容：
+                {json.dumps(pages, ensure_ascii=False, indent=2)}
 
-            PPT内容：
-            {json.dumps(pages, ensure_ascii=False, indent=2)}
+                请分析每个缩略语，判断是否需要解释。只标记那些：
+                - 目标读者可能不理解的
+                - 首次出现且缺乏解释的
+                - 专业性强或行业特定的
+                - **重要**：如果同一页面内已经提供了该缩略语的解释，则不要标记
+                - 如果某页之前已经解释过的缩略语，则不要标记
+                - 针对某个缩略语不要重复标记，只针对第一次出现的位置进行标记
 
-            请分析每个缩略语，判断是否需要解释。只标记那些：
-            - 目标读者可能不理解的
-            - 首次出现且缺乏解释的
-            - 专业性强或行业特定的
-            - **重要**：如果同一页面内已经提供了该缩略语的解释，则不要标记
-            - 如果某页之前已经解释过的缩略语，则不要标记
-            - 针对某个缩略语不要重复标记，只针对第一次出现的位置进行标记
+                主观评判标准：
+                假设你是一个公司的高层领导在审查下面员工的PPT汇报材料，你不太懂专业领域术语，当在查看某页PPT时，看到某个缩略语不太懂其中的含义，但未在该页内找到解释，你认为需要解释，则标记为需要解释。
 
-            主观评判标准：
-            假设你是一个公司的高层领导在审查下面员工的PPT汇报材料，你不太懂专业领域术语，当在查看某页PPT时，看到某个缩略语不太懂其中的含义，但未在该页内找到解释，你认为需要解释，则标记为需要解释。
-            
-            **特别注意**：
-            - 如果某页已经解释了某个缩略语（如"LLM：Large Language Model"），则不要标记该页的LLM
-            - 优先标记那些没有解释的专业技术缩略语
-            - 避免标记常见的逻辑词汇和基础术语
+                **特别注意**：
+                - 如果某页已经解释了某个缩略语（如"LLM：Large Language Model"），则不要标记该页的LLM
+                - 优先标记那些没有解释的专业技术缩略语
+                - 避免标记常见的逻辑词汇和基础术语
 
-            **重要**：请仔细分析每个页面，准确识别缩略语所在的页面索引，页面索引从1开始计数。
+                **重要**：请仔细分析每个页面，准确识别缩略语所在的页面索引，页面索引从1开始计数。
 
-            请以JSON格式返回审查结果，格式如下：
-            {{
-                "issues": [
-                    {{
-                        "rule_id": "LLM_AcronymRule",
-                        "severity": "info|warning|serious",
-                        "slide_index": 1（注意替换成实际页码，从1开始计数）,
-                        "object_ref": "page_1（注意替换成实际页码，从1开始计数）,
-                        "message": "专业缩略语 [缩略语名称] 首次出现未发现解释",
-                        "suggestion": "建议在首次出现后添加解释：[缩略语名称] (全称)",
-                        "can_autofix": false
-                    }}
-                ]
-            }}
+                请以JSON格式返回审查结果，格式如下：
+                {{
+                    "issues": [
+                        {{
+                            "rule_id": "LLM_AcronymRule",
+                            "severity": "info|warning|serious",
+                            "slide_index": 1（注意替换成实际页码，从1开始计数）,
+                            "object_ref": "page_1（注意替换成实际页码，从1开始计数）,
+                            "message": "专业缩略语 [缩略语名称] 首次出现未发现解释",
+                            "suggestion": "建议在首次出现后添加解释：[缩略语名称] (全称)",
+                            "can_autofix": false
+                        }}
+                    ]
+                }}
 
-            只返回JSON，不要其他内容。
-            """
+                只返回JSON，不要其他内容。"""
+        else:
+            # 回退到默认提示词
+            prompt = self._get_default_acronyms_prompt(pages)
         
         try:
             print(f"    📤 发送LLM请求...")
-            response = self.llm.complete(prompt, max_tokens=self.config.llm_max_tokens)
+            response = self.llm.complete(prompt, max_tokens=self.config.llm_max_tokens, stop_event=self.stop_event)
             print(f"    📥 收到LLM响应: {response[:100] if response else 'None'}...")
             
             if response:
                 cleaned_response = self._clean_json_response(response)
-                result = json.loads(cleaned_response)
+                try:
+                    result = json.loads(cleaned_response)
+                except json.JSONDecodeError as e:
+                    print(f"    ❌ JSON解析失败: {e}")
+                    print(f"    📄 清理后的响应: {cleaned_response}")
+                    return []
                 issues = []
                 
                 for item in result.get("issues", []):
@@ -443,75 +574,42 @@ class LLMReviewer:
         # 提取页面内容
         pages = parsing_data.get("contents", [])
         
-        prompt = f"""
-            你是一位非常挑剔和严谨的公司高层领导，正在审核下属提交的PPT汇报材料。你的标准极其严格，对标题结构问题零容忍。
+        # 使用提示词管理器获取用户提示词
+        if self.prompt_manager:
+            user_prompt = self.prompt_manager.get_user_prompt_for_review('title_structure')
+            # 构建完整提示词：用户提示 + 输入提示 + 输出提示
+            prompt = f"""{user_prompt}
 
-            作为挑剔的领导，请从以下维度严格审查PPT标题结构：
+                PPT内容：
+                {json.dumps(pages, ensure_ascii=False, indent=2)}
 
-            **1. 目录结构完整性（极其重要）**
-            - 目录页面是否完整覆盖所有章节内容
-            - 目录项是否准确反映实际页面标题
-            - 是否存在遗漏重要章节的问题
-            - 目录层级是否清晰合理
+                **重要**：请为每个问题提供精确的对象引用，格式如下：
+                - 如果问题影响整个页面：使用 "page_[页码]"
+                - 如果问题在特定文本块中：使用 "text_block_[页码]_[块索引]"
+                - 如果问题在标题中：使用 "title_[页码]"
 
-            **2. 章节标题层级关系（极其重要）**
-            - 主标题、子标题、小标题的层级是否清晰
-            - 标题编号是否连续、合理（如1、1.1、1.1.1）
-            - 是否存在层级混乱或跳跃的问题
-            - 同级标题是否保持一致的命名风格
+                请以JSON格式返回审查结果，格式如下：
+                {{
+                    "issues": [
+                        {{
+                            "rule_id": "LLM_TitleStructureRule",
+                            "severity": "warning|info|serious",
+                            "slide_index": 1（注意：页码从1开始计数）,
+                            "object_ref": "title_1（注意：页码从1开始计数）,
+                            "message": "问题描述",
+                            "suggestion": "具体建议",
+                            "can_autofix": false
+                        }}
+                    ]
+                }}
 
-            **3. 标题与内容匹配度（极其重要）**
-            - 每页标题是否准确反映页面核心内容
-            - 是否存在标题与内容不符的问题
-            - 标题是否过于宽泛或过于狭窄
-            - 是否存在标题误导听众的问题
-
-            **4. 标题逻辑连贯性（极其重要）**
-            - 前后页面标题之间是否有清晰的逻辑关系
-            - 是否存在突兀的标题跳跃
-            - 整体叙述线索是否清晰
-            - 标题是否形成完整的逻辑链条
-
-            **5. 标题表达规范性**
-            - 标题命名风格是否统一
-            - 是否存在语法错误或表达不清
-            - 专业术语使用是否一致
-            - 标题长度是否适中
-
-            PPT内容：
-            {json.dumps(pages, ensure_ascii=False, indent=2)}
-
-            **审查标准（极其严格）**：
-            - 以挑剔领导的视角，找出任何可能影响汇报效果的问题
-            - 对标题结构混乱、层级不清的问题零容忍
-            - 对标题与内容不符的问题零容忍
-            - 对逻辑跳跃、结构混乱的问题零容忍
-
-            **重要**：请为每个问题提供精确的对象引用，格式如下：
-            - 如果问题影响整个页面：使用 "page_[页码]"
-            - 如果问题在特定文本块中：使用 "text_block_[页码]_[块索引]"
-            - 如果问题在标题中：使用 "title_[页码]"
-
-            请以JSON格式返回审查结果，格式如下：
-            {{
-                "issues": [
-                    {{
-                        "rule_id": "LLM_TitleStructureRule",
-                        "severity": "warning|info|serious",
-                        "slide_index": 1（注意：页码从1开始计数）,
-                        "object_ref": "title_1（注意：页码从1开始计数）,
-                        "message": "问题描述",
-                        "suggestion": "具体建议",
-                        "can_autofix": false
-                    }}
-                ]
-            }}
-
-            只返回JSON，不要其他内容。
-            """
+                只返回JSON，不要其他内容。"""
+        else:
+            # 回退到默认提示词
+            prompt = self._get_default_title_structure_prompt(pages)
         
         try:
-            response = self.llm.complete(prompt, max_tokens=self.config.llm_max_tokens)
+            response = self.llm.complete(prompt, max_tokens=self.config.llm_max_tokens, stop_event=self.stop_event)
             if response:
                 print(f"    📥 收到LLM响应，长度: {len(response)} 字符")
                 print(f"    📄 响应前100字符: {response[:100]}...")
@@ -527,6 +625,12 @@ class LLMReviewer:
                     print(f"    ❌ JSON解析失败: {json_error}")
                     print(f"    📄 清理后的响应内容:")
                     print(f"    {cleaned_response}")
+                    
+                    # 如果清理后的响应为空，显示原始响应
+                    if not cleaned_response.strip():
+                        print(f"    📄 原始响应内容:")
+                        print(f"    {response}")
+                        print(f"    ⚠️ LLM可能返回了空响应或非JSON格式的响应")
                     
                     # 尝试进一步修复
                     try:

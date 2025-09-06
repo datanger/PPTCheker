@@ -155,7 +155,6 @@ class SimpleApp(tk.Tk):
         self.mode = tk.StringVar(value="review")
         
         # 审查设置变量
-        self.review_format = tk.BooleanVar(value=True)
         self.review_logic = tk.BooleanVar(value=True)
         self.review_acronyms = tk.BooleanVar(value=True)
         self.review_fluency = tk.BooleanVar(value=True)
@@ -163,7 +162,12 @@ class SimpleApp(tk.Tk):
         self.font_size = tk.BooleanVar(value=True)
         self.color_count = tk.BooleanVar(value=True)
         self.theme_harmony = tk.BooleanVar(value=True)
-        self.acronym_explanation = tk.BooleanVar(value=True)
+        
+        # 运行状态变量
+        self.is_running = False
+        self.should_stop = False
+        self.stop_event = threading.Event()  # 用于跨线程通信的停止事件
+        self.worker_thread = None  # 工作线程引用
         
         # 审查规则配置变量
         self.jp_font_name = tk.StringVar(value="Meiryo UI")
@@ -314,13 +318,22 @@ class SimpleApp(tk.Tk):
         self._create_review_settings(review_frame)
         
         # 区域3：开始运行按钮 - 进一步压缩高度
-        run_frame = ttk.LabelFrame(main_frame, text="▶️ 开始运行按钮", padding="3")
+        run_frame = ttk.LabelFrame(main_frame, text="▶️ 运行控制", padding="3")
         run_frame.pack(fill=tk.X, pady=(0, 8))
         
-        # 运行按钮居中
-        self.run_button = ttk.Button(run_frame, text="🚀 开始审查", command=self._run_review, 
-                                    width=25)
-        self.run_button.pack(pady=2)
+        # 按钮容器 - 并排显示
+        button_frame = ttk.Frame(run_frame)
+        button_frame.pack(pady=2)
+        
+        # 开始审查按钮
+        self.run_button = ttk.Button(button_frame, text="🚀 开始审查", command=self._run_review, 
+                                    width=15)
+        self.run_button.pack(side=tk.LEFT, padx=(0, 5))
+        
+        # 终止按钮
+        self.stop_button = ttk.Button(button_frame, text="⏹️ 终止", command=self._stop_review, 
+                                     width=15, state=tk.DISABLED)
+        self.stop_button.pack(side=tk.LEFT, padx=(5, 0))
         
         # 状态栏居中
         self.status_var = tk.StringVar(value="就绪")
@@ -362,8 +375,6 @@ class SimpleApp(tk.Tk):
         llm_review_frame = ttk.LabelFrame(container_frame, text="LLM审查", padding="8")
         llm_review_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
         
-        tk.Checkbutton(llm_review_frame, text="格式规范审查", variable=self.review_format, 
-                       font=('WenQuanYi Micro Hei', 9), selectcolor='white').pack(anchor=tk.W, padx=3, pady=2)
         tk.Checkbutton(llm_review_frame, text="内容逻辑审查", variable=self.review_logic, 
                        font=('WenQuanYi Micro Hei', 9), selectcolor='white').pack(anchor=tk.W, padx=3, pady=2)
         tk.Checkbutton(llm_review_frame, text="缩略语审查", variable=self.review_acronyms, 
@@ -372,6 +383,10 @@ class SimpleApp(tk.Tk):
                        font=('WenQuanYi Micro Hei', 9), selectcolor='white').pack(anchor=tk.W, padx=3, pady=2)
         tk.Checkbutton(llm_review_frame, text="主题一致性检查", variable=self.theme_harmony, 
                        font=('WenQuanYi Micro Hei', 9), selectcolor='white').pack(anchor=tk.W, padx=3, pady=2)
+        
+        # 提示词管理按钮
+        ttk.Button(llm_review_frame, text="📝 管理提示词", command=self._open_prompt_manager, 
+                   width=15).pack(anchor=tk.W, padx=3, pady=(10, 2))
         
         # 右列：审查规则设置
         rules_frame = ttk.LabelFrame(container_frame, text="规则审查", padding="8")
@@ -405,9 +420,18 @@ class SimpleApp(tk.Tk):
         ttk.Label(color_frame, text="阈值:").pack(side=tk.LEFT, padx=(10, 2))
         ttk.Spinbox(color_frame, from_=1, to=20, textvariable=self.color_count_threshold, width=6).pack(side=tk.LEFT, padx=(0, 5))
         
-        # 缩略语解释检查
-        tk.Checkbutton(rules_frame, text="缩略语解释检查", variable=self.acronym_explanation, 
-                       font=('WenQuanYi Micro Hei', 9), selectcolor='white').pack(anchor=tk.W, padx=3, pady=2)
+
+    def _open_prompt_manager(self):
+        """打开提示词管理窗口"""
+        try:
+            # 导入提示词管理器
+            from pptlint.prompt_manager import prompt_manager
+            
+            # 创建提示词管理窗口
+            PromptManagerWindow(self, prompt_manager)
+            
+        except Exception as e:
+            messagebox.showerror("错误", f"打开提示词管理器失败: {e}")
 
     def _select_ppt(self):
         """选择PPT文件"""
@@ -551,6 +575,31 @@ class SimpleApp(tk.Tk):
         self._log("💡 请选择PPT文件开始审查")
         self._log("-" * 50)
 
+    def _stop_review(self):
+        """终止审查"""
+        if self.is_running:
+            self.should_stop = True
+            self.stop_event.set()  # 设置停止事件
+            self._log("⏹️ 用户请求终止审查...")
+            self.status_var.set("正在终止...")
+            
+            # 强制终止工作线程（如果存在）
+            if self.worker_thread and self.worker_thread.is_alive():
+                self._log("🔄 正在强制终止工作线程...")
+                # 注意：在Windows上，强制终止线程可能不安全，但这是最后的 resort
+                try:
+                    import ctypes
+                    thread_id = self.worker_thread.ident
+                    if thread_id:
+                        ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(thread_id), ctypes.py_object(KeyboardInterrupt))
+                        self._log("✅ 工作线程已强制终止")
+                except Exception as e:
+                    self._log(f"⚠️ 强制终止失败: {e}")
+            
+            # 按钮状态会在_run_review方法中更新
+        else:
+            self._log("⚠️ 当前没有正在运行的审查任务")
+
     def _run_review(self):
         """运行审查"""
         # 验证输入
@@ -569,8 +618,14 @@ class SimpleApp(tk.Tk):
             messagebox.showerror("错误", "请设置输出目录")
             return
         
-        # 禁用运行按钮
+        # 设置运行状态
+        self.is_running = True
+        self.should_stop = False
+        self.stop_event.clear()  # 清除停止事件
+        
+        # 更新按钮状态
         self.run_button.config(state=tk.DISABLED)
+        self.stop_button.config(state=tk.NORMAL)
         self.status_var.set("运行中...")
         self._log("开始运行PPT审查...")
         
@@ -591,7 +646,6 @@ class SimpleApp(tk.Tk):
                 cfg = load_config(config_file)
                 
                 # 应用用户设置的审查配置
-                cfg.review_format = self.review_format.get()
                 cfg.review_logic = self.review_logic.get()
                 cfg.review_acronyms = self.review_acronyms.get()
                 cfg.review_fluency = self.review_fluency.get()
@@ -603,12 +657,16 @@ class SimpleApp(tk.Tk):
                 cfg.rules['font_size'] = self.font_size.get()
                 cfg.rules['color_count'] = self.color_count.get()
                 cfg.rules['theme_harmony'] = self.theme_harmony.get()
-                cfg.rules['acronym_explanation'] = self.acronym_explanation.get()
                 
                 # 应用审查规则配置值
                 cfg.jp_font_name = self.jp_font_name.get()
                 cfg.min_font_size_pt = self.min_font_size_pt.get()
                 cfg.color_count_threshold = self.color_count_threshold.get()
+                
+                # 检查是否应该终止
+                if self.should_stop:
+                    self._log("⏹️ 用户终止了审查过程")
+                    return
                 
                 # 解析PPT
                 self._log("步骤1: 解析PPT文件...")
@@ -632,16 +690,21 @@ class SimpleApp(tk.Tk):
                 self._log(f"✅ LLM客户端创建成功: {getattr(cfg, 'llm_provider', 'deepseek')}/{getattr(cfg, 'llm_model', 'deepseek-chat')}")
 
                 
+                # 检查是否应该终止
+                if self.should_stop:
+                    self._log("⏹️ 用户终止了审查过程")
+                    return
+                
                 # 运行审查 - 使用控制台捕获器
                 self._log("步骤2: 开始审查...")
                 try:
                     with ConsoleCapture(self._log):
-                        res = run_review_workflow(parsing_result_path, cfg, output_ppt_path, llm, input_ppt)
+                        res = run_review_workflow(parsing_result_path, cfg, output_ppt_path, llm, input_ppt, self.stop_event)
                 except Exception as workflow_error:
                     self._log(f"⚠️ 控制台捕获模式失败，使用标准模式: {workflow_error}")
                     # 降级到标准模式，不使用控制台捕获
                     try:
-                        res = run_review_workflow(parsing_result_path, cfg, output_ppt_path, llm, input_ppt)
+                        res = run_review_workflow(parsing_result_path, cfg, output_ppt_path, llm, input_ppt, self.stop_event)
                     except Exception as std_error:
                         self._log(f"❌ 标准模式也失败: {std_error}")
                         # 创建空的审查结果
@@ -672,11 +735,25 @@ class SimpleApp(tk.Tk):
                 self.status_var.set("运行失败")
                 messagebox.showerror("运行失败", str(e))
             finally:
+                # 重置运行状态
+                self.is_running = False
+                self.should_stop = False
+                self.stop_event.clear()  # 清除停止事件
+                self.worker_thread = None  # 清理线程引用
+                
+                # 恢复按钮状态
                 self.run_button.config(state=tk.NORMAL)
+                self.stop_button.config(state=tk.DISABLED)
+                
+                # 更新状态
+                if self.status_var.get() == "正在终止...":
+                    self.status_var.set("已终止")
+                elif self.status_var.get() == "运行中...":
+                    self.status_var.set("已完成")
 
         # 启动后台线程，设置daemon=True避免黑框显示
-        thread = threading.Thread(target=job, daemon=True)
-        thread.start()
+        self.worker_thread = threading.Thread(target=job, daemon=True)
+        self.worker_thread.start()
 
     def _show_success_dialog(self, output_dir: str, report_path: str, ppt_path: str):
         """显示成功对话框"""
@@ -738,6 +815,200 @@ class SimpleApp(tk.Tk):
                 messagebox.showinfo("保存成功", f"日志已保存到 {filename}")
             except Exception as e:
                 messagebox.showerror("保存失败", f"保存日志失败: {e}")
+
+
+class PromptManagerWindow:
+    """提示词管理窗口"""
+    
+    def __init__(self, parent, prompt_manager):
+        self.parent = parent
+        self.prompt_manager = prompt_manager
+        self.current_prompt_key = None
+        
+        # 创建窗口
+        self.window = tk.Toplevel(parent)
+        self.window.title("LLM提示词管理")
+        self.window.geometry("900x700")
+        self.window.resizable(True, True)
+        
+        # 设置窗口图标和居中
+        self.window.transient(parent)
+        self.window.grab_set()
+        
+        # 创建UI
+        self._create_ui()
+        
+        # 加载提示词列表
+        self._load_prompt_list()
+    
+    def _create_ui(self):
+        """创建UI界面"""
+        # 主容器
+        main_frame = ttk.Frame(self.window, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 标题
+        title_label = ttk.Label(main_frame, text="LLM提示词管理", font=('WenQuanYi Micro Hei', 12, 'bold'))
+        title_label.pack(pady=(0, 10))
+        
+        # 创建左右分栏
+        content_frame = ttk.Frame(main_frame)
+        content_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 左列：提示词列表
+        left_frame = ttk.LabelFrame(content_frame, text="提示词列表", padding="8")
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        
+        # 提示词列表框
+        self.prompt_listbox = tk.Listbox(left_frame, font=('WenQuanYi Micro Hei', 9))
+        self.prompt_listbox.pack(fill=tk.BOTH, expand=True)
+        self.prompt_listbox.bind('<<ListboxSelect>>', self._on_prompt_select)
+        
+        # 右列：提示词编辑
+        right_frame = ttk.LabelFrame(content_frame, text="提示词编辑", padding="8")
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
+        
+        # 提示词信息
+        info_frame = ttk.Frame(right_frame)
+        info_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(info_frame, text="名称:", font=('WenQuanYi Micro Hei', 9, 'bold')).pack(anchor=tk.W)
+        self.name_label = ttk.Label(info_frame, text="", font=('WenQuanYi Micro Hei', 9))
+        self.name_label.pack(anchor=tk.W, pady=(0, 5))
+        
+        ttk.Label(info_frame, text="描述:", font=('WenQuanYi Micro Hei', 9, 'bold')).pack(anchor=tk.W)
+        self.desc_label = ttk.Label(info_frame, text="", font=('WenQuanYi Micro Hei', 9), wraplength=350)
+        self.desc_label.pack(anchor=tk.W, pady=(0, 10))
+        
+        # 提示词编辑区域
+        ttk.Label(right_frame, text="用户提示词 (可编辑):", font=('WenQuanYi Micro Hei', 9, 'bold')).pack(anchor=tk.W)
+        
+        # 创建文本框和滚动条
+        text_frame = ttk.Frame(right_frame)
+        text_frame.pack(fill=tk.BOTH, expand=True, pady=(5, 10))
+        
+        self.prompt_text = tk.Text(text_frame, wrap=tk.WORD, font=('WenQuanYi Micro Hei', 9), height=15)
+        scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=self.prompt_text.yview)
+        self.prompt_text.configure(yscrollcommand=scrollbar.set)
+        
+        self.prompt_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # 按钮区域
+        button_frame = ttk.Frame(right_frame)
+        button_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        ttk.Button(button_frame, text="保存", command=self._save_prompt, width=10).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="重置", command=self._reset_prompt, width=10).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="查看完整提示词", command=self._view_full_prompt, width=15).pack(side=tk.RIGHT)
+        
+        # 底部按钮
+        bottom_frame = ttk.Frame(main_frame)
+        bottom_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        ttk.Button(bottom_frame, text="关闭", command=self.window.destroy, width=10).pack(side=tk.RIGHT)
+    
+    def _load_prompt_list(self):
+        """加载提示词列表"""
+        self.prompt_listbox.delete(0, tk.END)
+        
+        prompts = self.prompt_manager.get_all_prompts()
+        for key, prompt in prompts.items():
+            self.prompt_listbox.insert(tk.END, prompt.name)
+        
+        # 存储key到name的映射
+        self.key_to_name = {prompt.name: key for key, prompt in prompts.items()}
+    
+    def _on_prompt_select(self, event):
+        """提示词选择事件"""
+        selection = self.prompt_listbox.curselection()
+        if selection:
+            name = self.prompt_listbox.get(selection[0])
+            key = self.key_to_name.get(name)
+            if key:
+                self._load_prompt_content(key)
+    
+    def _load_prompt_content(self, key):
+        """加载提示词内容"""
+        self.current_prompt_key = key
+        prompt = self.prompt_manager.get_prompt(key)
+        
+        if prompt:
+            self.name_label.config(text=prompt.name)
+            self.desc_label.config(text=prompt.description)
+            self.prompt_text.delete(1.0, tk.END)
+            self.prompt_text.insert(1.0, prompt.user_prompt)
+    
+    def _save_prompt(self):
+        """保存提示词"""
+        if not self.current_prompt_key:
+            messagebox.showwarning("警告", "请先选择一个提示词")
+            return
+        
+        new_prompt = self.prompt_text.get(1.0, tk.END).strip()
+        if not new_prompt:
+            messagebox.showwarning("警告", "提示词不能为空")
+            return
+        
+        try:
+            self.prompt_manager.update_user_prompt(self.current_prompt_key, new_prompt)
+            self.prompt_manager.save_prompts()
+            messagebox.showinfo("成功", "提示词已保存")
+        except Exception as e:
+            messagebox.showerror("错误", f"保存失败: {e}")
+    
+    def _reset_prompt(self):
+        """重置提示词"""
+        if not self.current_prompt_key:
+            messagebox.showwarning("警告", "请先选择一个提示词")
+            return
+        
+        if messagebox.askyesno("确认", "确定要重置为默认提示词吗？"):
+            try:
+                # 重新加载配置文件
+                self.prompt_manager.load_prompts()
+                self._load_prompt_content(self.current_prompt_key)
+                messagebox.showinfo("成功", "已重置为默认提示词")
+            except Exception as e:
+                messagebox.showerror("错误", f"重置失败: {e}")
+    
+    def _view_full_prompt(self):
+        """查看完整提示词"""
+        if not self.current_prompt_key:
+            messagebox.showwarning("警告", "请先选择一个提示词")
+            return
+        
+        prompt = self.prompt_manager.get_prompt(self.current_prompt_key)
+        if prompt:
+            # 创建新窗口显示完整提示词
+            full_window = tk.Toplevel(self.window)
+            full_window.title(f"完整提示词 - {prompt.name}")
+            full_window.geometry("1000x800")
+            
+            # 创建文本框
+            text_frame = ttk.Frame(full_window, padding="10")
+            text_frame.pack(fill=tk.BOTH, expand=True)
+            
+            text_widget = tk.Text(text_frame, wrap=tk.WORD, font=('WenQuanYi Micro Hei', 9))
+            scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=text_widget.yview)
+            text_widget.configure(yscrollcommand=scrollbar.set)
+            
+            text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            
+            # 插入完整提示词（只显示用户提示部分）
+            full_prompt = f"""=== 用户提示词（可编辑） ===
+{prompt.user_prompt}
+
+=== 说明 ===
+输入提示和输出提示部分保留在代码中，不在配置文件中。
+用户只能修改上述用户提示词部分。"""
+            
+            text_widget.insert(1.0, full_prompt)
+            text_widget.config(state=tk.DISABLED)  # 只读模式
+            
+            # 关闭按钮
+            ttk.Button(full_window, text="关闭", command=full_window.destroy).pack(pady=10)
 
 
 def main():

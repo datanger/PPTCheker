@@ -35,7 +35,7 @@ class WorkflowResult:
         self.llm_issues_count: int = 0
 
 
-def run_review_workflow(parsing_result_path: str, cfg: ToolConfig, output_ppt: Optional[str], llm: Optional[LLMClient], original_pptx_path: Optional[str] = None) -> WorkflowResult:
+def run_review_workflow(parsing_result_path: str, cfg: ToolConfig, output_ppt: Optional[str], llm: Optional[LLMClient], original_pptx_path: Optional[str] = None, stop_event: Optional[object] = None) -> WorkflowResult:
     res = WorkflowResult()
     
     # 步骤1：加载 parsing_result.json
@@ -48,7 +48,7 @@ def run_review_workflow(parsing_result_path: str, cfg: ToolConfig, output_ppt: O
     # 步骤2：分析PPT结构
     print("🔍 分析PPT结构...")
     try:
-        parsing_data = analyze_from_parsing_result(parsing_data, llm)
+        parsing_data = analyze_from_parsing_result(parsing_data, llm, stop_event)
         print("✅ PPT结构分析完成")
         
         # 将结构分析结果重新写入parsing_result.json
@@ -113,17 +113,19 @@ def _perform_llm_review(parsing_data, cfg: ToolConfig, llm: Optional[LLMClient])
     try:
         print("🤖 创建LLM审查器...")
         reviewer = create_llm_reviewer(llm, cfg)
+        # 设置停止事件
+        if stop_event:
+            reviewer.set_stop_event(stop_event)
         
         issues = []
         
-        # 根据配置开关决定是否执行各项审查
-        if cfg.review_format:
-            print("🤖 开始格式标准审查...")
-            fmt = reviewer.review_format_standards(parsing_data)
-            if fmt:
-                issues.extend(fmt)
-        else:
-            print("🤖 格式标准审查已禁用，跳过...")
+        # 格式规范审查已移至规则审查，这里不再执行
+        print("⏭️ 跳过格式标准审查（已移至规则审查）")
+        
+        # 检查是否应该停止
+        if stop_event and stop_event.is_set():
+            print("⏹️ 用户请求终止，停止LLM审查")
+            return res
         
         if cfg.review_logic:
             print("🤖 开始内容逻辑审查...")
@@ -133,6 +135,11 @@ def _perform_llm_review(parsing_data, cfg: ToolConfig, llm: Optional[LLMClient])
         else:
             print("🤖 内容逻辑审查已禁用，跳过...")
         
+        # 检查是否应该停止
+        if stop_event and stop_event.is_set():
+            print("⏹️ 用户请求终止，停止LLM审查")
+            return res
+        
         if cfg.review_acronyms:
             print("🤖 开始缩略语审查...")
             acr = reviewer.review_acronyms(parsing_data)
@@ -140,6 +147,11 @@ def _perform_llm_review(parsing_data, cfg: ToolConfig, llm: Optional[LLMClient])
                 issues.extend(acr)
         else:
             print("🤖 缩略语审查已禁用，跳过...")
+        
+        # 检查是否应该停止
+        if stop_event and stop_event.is_set():
+            print("⏹️ 用户请求终止，停止LLM审查")
+            return res
         
         if cfg.review_fluency:
             print("🤖 开始标题结构审查...")
