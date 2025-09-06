@@ -154,6 +154,22 @@ class SimpleApp(tk.Tk):
         self.llm_api_key = tk.StringVar()
         self.mode = tk.StringVar(value="review")
         
+        # 审查设置变量
+        self.review_format = tk.BooleanVar(value=True)
+        self.review_logic = tk.BooleanVar(value=True)
+        self.review_acronyms = tk.BooleanVar(value=True)
+        self.review_fluency = tk.BooleanVar(value=True)
+        self.font_family = tk.BooleanVar(value=True)
+        self.font_size = tk.BooleanVar(value=True)
+        self.color_count = tk.BooleanVar(value=True)
+        self.theme_harmony = tk.BooleanVar(value=True)
+        self.acronym_explanation = tk.BooleanVar(value=True)
+        
+        # 审查规则配置变量
+        self.jp_font_name = tk.StringVar(value="Meiryo UI")
+        self.min_font_size_pt = tk.IntVar(value=12)
+        self.color_count_threshold = tk.IntVar(value=5)
+        
         # 控制台捕获器
         self.console_capture = None
         
@@ -180,6 +196,35 @@ class SimpleApp(tk.Tk):
             style.configure('TCheckbutton', font=default_font)
             style.configure('TLabelframe.Label', font=default_font)
             
+            # 尝试修改复选框的选中标记为√
+            try:
+                # 方法1：尝试使用不同的主题
+                available_themes = style.theme_names()
+                print(f"可用主题: {available_themes}")
+                
+                # 尝试使用alt主题，它通常有更好的复选框样式
+                if 'alt' in available_themes:
+                    style.theme_use('alt')
+                    print("✅ 使用alt主题")
+                elif 'default' in available_themes:
+                    style.theme_use('default')
+                    print("✅ 使用default主题")
+                
+                # 重新配置复选框样式
+                style.configure('TCheckbutton', font=default_font)
+                
+                # 方法2：尝试修改复选框的映射
+                style.map('TCheckbutton',
+                         indicatorcolor=[('selected', 'black'),
+                                       ('!selected', 'white')],
+                         background=[('active', 'white'),
+                                   ('!active', 'white')])
+                
+                print("✅ 复选框样式修改完成")
+                
+            except Exception as e:
+                print(f"⚠️ 复选框样式修改失败: {e}")
+            
             print("使用Ubuntu优化字体设置")
                 
         except Exception as e:
@@ -198,9 +243,13 @@ class SimpleApp(tk.Tk):
         title_label = ttk.Label(main_frame, text="PPT审查工具", font=self.title_font)
         title_label.pack(pady=(0, 20))
         
-        # 区域1：文件上传窗口
-        file_frame = ttk.LabelFrame(main_frame, text="📁 文件上传窗口", padding="15")
-        file_frame.pack(fill=tk.X, pady=(0, 15))
+        # 第一行：文件上传窗口和LLM配置窗口并排排列
+        first_row_frame = ttk.Frame(main_frame)
+        first_row_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # 文件上传窗口（5/10宽度）
+        file_frame = ttk.LabelFrame(first_row_frame, text="📁 文件上传窗口", padding="15")
+        file_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
         
         # PPT文件选择
         ppt_frame = ttk.Frame(file_frame)
@@ -224,14 +273,9 @@ class SimpleApp(tk.Tk):
                                  state="readonly", width=20)
         mode_combo.pack(side=tk.LEFT, padx=(8, 0))
         
-        # 区域2：LLM配置窗口
-        llm_frame = ttk.LabelFrame(main_frame, text="🤖 LLM配置窗口", padding="15")
-        llm_frame.pack(fill=tk.X, pady=(0, 15))
-        
-        # 启用LLM
-        enable_frame = ttk.Frame(llm_frame)
-        enable_frame.pack(fill=tk.X, pady=8)
-        ttk.Checkbutton(enable_frame, text="启用LLM审查", variable=self.llm_enabled).pack(side=tk.LEFT)
+        # LLM配置窗口（5/10宽度）
+        llm_frame = ttk.LabelFrame(first_row_frame, text="🤖 LLM配置窗口", padding="15")
+        llm_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
         
         # 提供商选择
         provider_frame = ttk.Frame(llm_frame)
@@ -262,19 +306,26 @@ class SimpleApp(tk.Tk):
         # 初始化模型列表
         self._update_model_list()
         
-        # 区域3：开始运行按钮
-        run_frame = ttk.LabelFrame(main_frame, text="▶️ 开始运行按钮", padding="10")
-        run_frame.pack(fill=tk.X, pady=(0, 15))
+        # 第二行：审查配置窗口（10/10宽度，全宽）- 增加高度
+        review_frame = ttk.LabelFrame(main_frame, text="⚙️ 审查配置窗口", padding="15")
+        review_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
         
-        # 运行按钮 - 更大的按钮
+        # 创建审查设置
+        self._create_review_settings(review_frame)
+        
+        # 区域3：开始运行按钮 - 进一步压缩高度
+        run_frame = ttk.LabelFrame(main_frame, text="▶️ 开始运行按钮", padding="3")
+        run_frame.pack(fill=tk.X, pady=(0, 8))
+        
+        # 运行按钮居中
         self.run_button = ttk.Button(run_frame, text="🚀 开始审查", command=self._run_review, 
-                                    width=30)
-        self.run_button.pack(pady=8)
+                                    width=25)
+        self.run_button.pack(pady=2)
         
-        # 状态栏
+        # 状态栏居中
         self.status_var = tk.StringVar(value="就绪")
-        status_label = ttk.Label(run_frame, textvariable=self.status_var, anchor=tk.W)
-        status_label.pack(fill=tk.X, pady=(5, 0))
+        status_label = ttk.Label(run_frame, textvariable=self.status_var, anchor=tk.CENTER)
+        status_label.pack(fill=tk.X, pady=(2, 0))
         
         # 区域4：LOG日志窗口
         log_frame = ttk.LabelFrame(main_frame, text="📋 LOG日志窗口", padding="10")
@@ -297,6 +348,66 @@ class SimpleApp(tk.Tk):
         )
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
+    def _create_review_settings(self, parent):
+        """创建审查设置 - 清晰整齐的等宽布局"""
+        # 创建容器Frame
+        container_frame = ttk.Frame(parent)
+        container_frame.pack(fill=tk.BOTH, expand=True, pady=8)
+        
+        # 配置grid列权重 - 确保等宽
+        container_frame.grid_columnconfigure(0, weight=1)  # 左列权重1
+        container_frame.grid_columnconfigure(1, weight=1)  # 右列权重1
+        
+        # 左列：LLM审查设置
+        llm_review_frame = ttk.LabelFrame(container_frame, text="LLM审查", padding="8")
+        llm_review_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        
+        tk.Checkbutton(llm_review_frame, text="格式规范审查", variable=self.review_format, 
+                       font=('WenQuanYi Micro Hei', 9), selectcolor='white').pack(anchor=tk.W, padx=3, pady=2)
+        tk.Checkbutton(llm_review_frame, text="内容逻辑审查", variable=self.review_logic, 
+                       font=('WenQuanYi Micro Hei', 9), selectcolor='white').pack(anchor=tk.W, padx=3, pady=2)
+        tk.Checkbutton(llm_review_frame, text="缩略语审查", variable=self.review_acronyms, 
+                       font=('WenQuanYi Micro Hei', 9), selectcolor='white').pack(anchor=tk.W, padx=3, pady=2)
+        tk.Checkbutton(llm_review_frame, text="表达流畅性审查", variable=self.review_fluency, 
+                       font=('WenQuanYi Micro Hei', 9), selectcolor='white').pack(anchor=tk.W, padx=3, pady=2)
+        tk.Checkbutton(llm_review_frame, text="主题一致性检查", variable=self.theme_harmony, 
+                       font=('WenQuanYi Micro Hei', 9), selectcolor='white').pack(anchor=tk.W, padx=3, pady=2)
+        
+        # 右列：审查规则设置
+        rules_frame = ttk.LabelFrame(container_frame, text="规则审查", padding="8")
+        rules_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+        
+        # 字体族检查 - 使用Frame包装实现整齐排列
+        font_frame = ttk.Frame(rules_frame)
+        font_frame.pack(fill=tk.X, pady=2)
+        tk.Checkbutton(font_frame, text="字体族检查", variable=self.font_family, 
+                       font=('WenQuanYi Micro Hei', 9), selectcolor='white').pack(side=tk.LEFT)
+        ttk.Label(font_frame, text="默认:").pack(side=tk.LEFT, padx=(10, 2))
+        font_combo = ttk.Combobox(font_frame, textvariable=self.jp_font_name, 
+                                 values=["Meiryo UI", "宋体", "微软雅黑", "楷体", "Time New Roman"], 
+                                 state="readonly", width=12)
+        font_combo.pack(side=tk.LEFT, padx=(0, 5))
+        
+        # 字号检查
+        size_frame = ttk.Frame(rules_frame)
+        size_frame.pack(fill=tk.X, pady=2)
+        tk.Checkbutton(size_frame, text="字号检查", variable=self.font_size, 
+                       font=('WenQuanYi Micro Hei', 9), selectcolor='white').pack(side=tk.LEFT)
+        ttk.Label(size_frame, text="最小:").pack(side=tk.LEFT, padx=(10, 2))
+        ttk.Spinbox(size_frame, from_=8, to=72, textvariable=self.min_font_size_pt, width=6).pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Label(size_frame, text="pt").pack(side=tk.LEFT, padx=(0, 5))
+        
+        # 颜色数量检查
+        color_frame = ttk.Frame(rules_frame)
+        color_frame.pack(fill=tk.X, pady=2)
+        tk.Checkbutton(color_frame, text="颜色数量检查", variable=self.color_count, 
+                       font=('WenQuanYi Micro Hei', 9), selectcolor='white').pack(side=tk.LEFT)
+        ttk.Label(color_frame, text="阈值:").pack(side=tk.LEFT, padx=(10, 2))
+        ttk.Spinbox(color_frame, from_=1, to=20, textvariable=self.color_count_threshold, width=6).pack(side=tk.LEFT, padx=(0, 5))
+        
+        # 缩略语解释检查
+        tk.Checkbutton(rules_frame, text="缩略语解释检查", variable=self.acronym_explanation, 
+                       font=('WenQuanYi Micro Hei', 9), selectcolor='white').pack(anchor=tk.W, padx=3, pady=2)
 
     def _select_ppt(self):
         """选择PPT文件"""
@@ -386,6 +497,38 @@ class SimpleApp(tk.Tk):
                     # 加载LLM启用状态
                     if hasattr(config, 'llm_enabled'):
                         self.llm_enabled.set(config.llm_enabled)
+                    
+                    # 加载审查设置
+                    if hasattr(config, 'review_format'):
+                        self.review_format.set(config.review_format)
+                    if hasattr(config, 'review_logic'):
+                        self.review_logic.set(config.review_logic)
+                    if hasattr(config, 'review_acronyms'):
+                        self.review_acronyms.set(config.review_acronyms)
+                    if hasattr(config, 'review_fluency'):
+                        self.review_fluency.set(config.review_fluency)
+                    
+                    # 加载审查规则设置
+                    if hasattr(config, 'rules') and config.rules:
+                        if 'font_family' in config.rules:
+                            self.font_family.set(config.rules['font_family'])
+                        if 'font_size' in config.rules:
+                            self.font_size.set(config.rules['font_size'])
+                        if 'color_count' in config.rules:
+                            self.color_count.set(config.rules['color_count'])
+                        if 'theme_harmony' in config.rules:
+                            self.theme_harmony.set(config.rules['theme_harmony'])
+                        if 'acronym_explanation' in config.rules:
+                            self.acronym_explanation.set(config.rules['acronym_explanation'])
+                    
+                    # 加载审查规则配置值
+                    if hasattr(config, 'jp_font_name'):
+                        self.jp_font_name.set(config.jp_font_name)
+                    if hasattr(config, 'min_font_size_pt'):
+                        self.min_font_size_pt.set(config.min_font_size_pt)
+                    if hasattr(config, 'color_count_threshold'):
+                        self.color_count_threshold.set(config.color_count_threshold)
+                    
                     self._update_model_list()
                     
                     # 记录配置加载成功
@@ -446,6 +589,26 @@ class SimpleApp(tk.Tk):
                 # 加载配置
                 config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs", "config.yaml")
                 cfg = load_config(config_file)
+                
+                # 应用用户设置的审查配置
+                cfg.review_format = self.review_format.get()
+                cfg.review_logic = self.review_logic.get()
+                cfg.review_acronyms = self.review_acronyms.get()
+                cfg.review_fluency = self.review_fluency.get()
+                
+                # 应用审查规则配置
+                if not hasattr(cfg, 'rules'):
+                    cfg.rules = {}
+                cfg.rules['font_family'] = self.font_family.get()
+                cfg.rules['font_size'] = self.font_size.get()
+                cfg.rules['color_count'] = self.color_count.get()
+                cfg.rules['theme_harmony'] = self.theme_harmony.get()
+                cfg.rules['acronym_explanation'] = self.acronym_explanation.get()
+                
+                # 应用审查规则配置值
+                cfg.jp_font_name = self.jp_font_name.get()
+                cfg.min_font_size_pt = self.min_font_size_pt.get()
+                cfg.color_count_threshold = self.color_count_threshold.get()
                 
                 # 解析PPT
                 self._log("步骤1: 解析PPT文件...")
