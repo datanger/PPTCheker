@@ -27,6 +27,8 @@ llm_api_key: "sk-0b582422a77448fbaacc018d714af908"  # API密钥（请替换为�
 llm_endpoint: ""              # 自定义端点（留空则使用默认）
 llm_temperature: 0.2          # 温度参数（越低越确定）
 llm_max_tokens: 4000         # 最大token数
+llm_use_proxy: false          # 是否使用代理（默认关闭）
+llm_proxy_url: ""             # 代理URL（如：http://proxy.company.com:8080）
 
 # 支持的模型列表
 llm_models:

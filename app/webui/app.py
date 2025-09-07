@@ -86,7 +86,9 @@ if submitted:
                 api_key=ak,
                 model=model,
                 temperature=0.2,
-                max_tokens=9999
+                max_tokens=9999,
+                use_proxy=False,  # WebUI暂不支持代理配置
+                proxy_url=None
             )
 
             out_dir = os.path.join("out")

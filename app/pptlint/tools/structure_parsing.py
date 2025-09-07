@@ -269,7 +269,9 @@ if __name__ == "__main__":
         endpoint=getattr(cfg, 'llm_endpoint', None),
         model=getattr(cfg, 'llm_model', 'deepseek-chat'),
         temperature=getattr(cfg, 'llm_temperature', 0.2),
-        max_tokens=getattr(cfg, 'llm_max_tokens', 9999)
+        max_tokens=getattr(cfg, 'llm_max_tokens', 9999),
+        use_proxy=getattr(cfg, 'llm_use_proxy', False),
+        proxy_url=getattr(cfg, 'llm_proxy_url', None)
     )
     # 静默运行，只更新 parsing_result.json
     parsing_data = load_parsing_result("parsing_result.json")

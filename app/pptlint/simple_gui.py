@@ -460,7 +460,9 @@ class SimpleApp(tk.Tk):
                             endpoint=getattr(cfg, 'llm_endpoint', None),
                             model=getattr(cfg, 'llm_model', 'deepseek-chat'),
                             temperature=getattr(cfg, 'llm_temperature', 0.2),
-                            max_tokens=getattr(cfg, 'llm_max_tokens', 9999)
+                            max_tokens=getattr(cfg, 'llm_max_tokens', 9999),
+                            use_proxy=getattr(cfg, 'llm_use_proxy', False),
+                            proxy_url=getattr(cfg, 'llm_proxy_url', None)
                         )
                         self._log(f"✅ LLM客户端创建成功: {getattr(cfg, 'llm_provider', 'deepseek')}/{getattr(cfg, 'llm_model', 'deepseek-chat')}")
                     except Exception as e:

@@ -131,7 +131,9 @@ def main():
             endpoint=getattr(cfg, 'llm_endpoint', None),
             model=getattr(cfg, 'llm_model', 'deepseek-chat'),
             temperature=getattr(cfg, 'llm_temperature', 0.2),
-            max_tokens=getattr(cfg, 'llm_max_tokens', 9999)
+            max_tokens=getattr(cfg, 'llm_max_tokens', 9999),
+            use_proxy=getattr(cfg, 'llm_use_proxy', False),
+            proxy_url=getattr(cfg, 'llm_proxy_url', None)
         )
 
     from .workflow import run_review_workflow, run_edit_workflow

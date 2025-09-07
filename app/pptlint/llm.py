@@ -36,12 +36,17 @@ def _resolve_endpoint(provider: str, model: Optional[str], explicit_endpoint: Op
 class LLMClient:
     def __init__(self, provider: str = "deepseek", endpoint: Optional[str] = None, 
                  api_key: Optional[str] = None, model: Optional[str] = None,
-                 temperature: float = 0.2, max_tokens: int = 1024):
+                 temperature: float = 0.2, max_tokens: int = 1024,
+                 use_proxy: bool = False, proxy_url: Optional[str] = None):
         self.provider = provider
         self.model = model or "deepseek-chat"
         self.endpoint = _resolve_endpoint(self.provider, self.model, endpoint)
         self.temperature = temperature
         self.max_tokens = max_tokens
+        
+        # 代理配置
+        self.use_proxy = use_proxy
+        self.proxy_url = proxy_url
         
         # 根据提供商设置API key
         if api_key:
@@ -80,6 +85,22 @@ class LLMClient:
                 return ""
             
             try:
+                # 配置代理处理
+                if self.use_proxy and self.proxy_url:
+                    # 启用代理
+                    proxy_handler = urllib.request.ProxyHandler({
+                        'http': self.proxy_url,
+                        'https': self.proxy_url
+                    })
+                    opener = urllib.request.build_opener(proxy_handler)
+                    urllib.request.install_opener(opener)
+                    print(f"🌐 使用代理: {self.proxy_url}")
+                else:
+                    # 禁用代理，清除环境变量影响
+                    proxy_handler = urllib.request.ProxyHandler({})
+                    opener = urllib.request.build_opener(proxy_handler)
+                    urllib.request.install_opener(opener)
+                
                 with urllib.request.urlopen(req, data=data) as resp:
                     payload = json.loads(resp.read().decode("utf-8"))
                     # OpenAI style

@@ -38,6 +38,8 @@ class ToolConfig:
     llm_endpoint: Optional[str] = None  # 自定义端点（留空则使用默认）
     llm_temperature: float = 0.2
     llm_max_tokens: int = 9999
+    llm_use_proxy: bool = False         # 是否使用代理（默认关闭）
+    llm_proxy_url: Optional[str] = None # 代理URL
 
     # 审查维度开关
     review_format: bool = True      # 格式规范审查
