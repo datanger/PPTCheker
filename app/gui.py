@@ -182,11 +182,20 @@ class SimpleApp(tk.Tk):
         # 会话内按提供商记忆 API Key，并持久化到本地
         self.provider_api_keys = {}
         self.api_keys_path = os.path.join(os.path.expanduser("~"), ".pptlint_api_keys.json")
+        # 用户设置（运行配置与LLM配置）持久化路径
+        self.user_settings_path = os.path.join(os.path.expanduser("~"), ".pptlint_settings.json")
+        # 按 provider 记忆 LLM 设置：model/base_url
+        self.provider_settings = {}
         self.llm_base_url = tk.StringVar()
         self.mode = tk.StringVar(value="review")
         
         # 运行配置变量
         self.enable_report_optimization = tk.BooleanVar(value=True)
+        # UI主题与代理配置
+        self.ui_theme = tk.StringVar(value="alt")
+        self.use_proxy = tk.BooleanVar(value=False)
+        # 默认本地代理端口
+        self.proxy_url = tk.StringVar(value="http://127.0.0.1:7890")
         
         # 审查设置变量
         self.review_logic = tk.BooleanVar(value=True)
@@ -213,6 +222,72 @@ class SimpleApp(tk.Tk):
         
         self._build_ui()
         self._load_default_config()
+        # 最后加载用户设置，覆盖默认配置
+        self._load_user_settings()
+
+    # ========== 用户设置持久化 ==========
+    def _save_user_settings(self):
+        """保存运行配置与LLM配置到本地用户设置文件。"""
+        try:
+            settings = {
+                "llm_provider": self.llm_provider.get(),
+                "llm_model": self.llm_model.get(),
+                "llm_base_url": self.llm_base_url.get(),
+                "mode": self.mode.get(),
+                "enable_report_optimization": bool(self.enable_report_optimization.get()),
+                "ui_theme": self.ui_theme.get() if hasattr(self, 'ui_theme') else None,
+                "llm_use_proxy": bool(self.use_proxy.get()) if hasattr(self, 'use_proxy') else False,
+                "llm_proxy_url": self.proxy_url.get() if hasattr(self, 'proxy_url') else None,
+            }
+            with open(self.user_settings_path, "w", encoding="utf-8") as f:
+                json.dump(settings, f, ensure_ascii=False, indent=2)
+            self._log(f"💾 用户设置已保存: {self.user_settings_path}")
+        except Exception as e:
+            self._log(f"⚠️ 保存用户设置失败: {e}")
+
+    def _load_user_settings(self):
+        """从本地用户设置文件加载运行配置与LLM配置。"""
+        try:
+            if os.path.exists(self.user_settings_path):
+                with open(self.user_settings_path, "r", encoding="utf-8") as f:
+                    s = json.load(f)
+                # provider 级别设置
+                if s.get('provider_settings') and isinstance(s.get('provider_settings'), dict):
+                    self.provider_settings = s.get('provider_settings')
+                # LLM 配置
+                if s.get("llm_provider"):
+                    self.llm_provider.set(s.get("llm_provider"))
+                if s.get("llm_model"):
+                    self.llm_model.set(s.get("llm_model"))
+                if s.get("llm_base_url"):
+                    self.llm_base_url.set(s.get("llm_base_url"))
+                # 运行配置
+                if s.get("mode"):
+                    self.mode.set(s.get("mode"))
+                if "enable_report_optimization" in s:
+                    self.enable_report_optimization.set(bool(s.get("enable_report_optimization")))
+                # UI主题与代理
+                if s.get("ui_theme"):
+                    self.ui_theme.set(s.get("ui_theme"))
+                    try:
+                        ttk.Style().theme_use(self.ui_theme.get())
+                    except Exception:
+                        pass
+                if "llm_use_proxy" in s and hasattr(self, 'use_proxy'):
+                    self.use_proxy.set(bool(s.get("llm_use_proxy")))
+                if s.get("llm_proxy_url") and hasattr(self, 'proxy_url'):
+                    self.proxy_url.set(s.get("llm_proxy_url"))
+                self._log(f"✅ 已加载用户设置: {self.user_settings_path}")
+        except Exception as e:
+            self._log(f"⚠️ 加载用户设置失败: {e}")
+
+    def _apply_theme(self, theme_name: str):
+        """应用界面主题"""
+        try:
+            ttk.Style().theme_use(theme_name)
+            colored_print(f"✅ 已应用主题: {theme_name}", 'success')
+        except Exception as e:
+            colored_print(f"⚠️ 应用主题失败: {e}", 'warning')
 
     def _setup_fonts(self):
         """设置字体样式 - Ubuntu优化版本"""
@@ -224,7 +299,14 @@ class SimpleApp(tk.Tk):
             
             # 配置ttk样式
             style = ttk.Style()
-            style.theme_use('clam')
+            try:
+                # 若用户已选择主题，优先应用
+                if hasattr(self, 'ui_theme') and self.ui_theme.get():
+                    style.theme_use(self.ui_theme.get())
+                else:
+                    style.theme_use('clam')
+            except Exception:
+                style.theme_use('clam')
             
             # 设置控件字体
             style.configure('TLabel', font=default_font)
@@ -241,12 +323,17 @@ class SimpleApp(tk.Tk):
                 colored_print(f"可用主题: {available_themes}", 'info')
                 
                 # 尝试使用alt主题，它通常有更好的复选框样式
-                if 'alt' in available_themes:
-                    style.theme_use('alt')
-                    colored_print("✅ 使用alt主题", 'success')
-                elif 'default' in available_themes:
-                    style.theme_use('default')
-                    colored_print("✅ 使用default主题", 'success')
+                if not hasattr(self, 'ui_theme') or not self.ui_theme.get():
+                    if 'alt' in available_themes:
+                        style.theme_use('alt')
+                        colored_print("✅ 使用alt主题", 'success')
+                        if hasattr(self, 'ui_theme'):
+                            self.ui_theme.set('alt')
+                    elif 'default' in available_themes:
+                        style.theme_use('default')
+                        colored_print("✅ 使用default主题", 'success')
+                        if hasattr(self, 'ui_theme'):
+                            self.ui_theme.set('default')
                 
                 # 重新配置复选框样式
                 style.configure('TCheckbutton', font=default_font)
@@ -536,9 +623,30 @@ class SimpleApp(tk.Tk):
                                  state="readonly", width=20)
         mode_combo.pack(side=tk.LEFT, padx=(8, 0))
         
+        # 主题选择
+        theme_frame = ttk.Frame(run_config_frame)
+        theme_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(theme_frame, text="界面主题:", width=12).pack(side=tk.LEFT)
+        try:
+            style = ttk.Style()
+            available_themes = style.theme_names()
+        except Exception:
+            available_themes = ("clam", "alt", "default", "classic")
+        theme_combo = ttk.Combobox(theme_frame, textvariable=self.ui_theme, values=available_themes, state="readonly", width=20)
+        theme_combo.pack(side=tk.LEFT, padx=(8, 0))
+        theme_combo.bind('<<ComboboxSelected>>', lambda e: self._apply_theme(self.ui_theme.get()))
+
         # 报告优化选项
         tk.Checkbutton(run_config_frame, text="启用报告优化", variable=self.enable_report_optimization, 
                        font=('WenQuanYi Micro Hei', 9), selectcolor='white').pack(anchor=tk.W, padx=3, pady=2)
+
+        # 代理配置
+        proxy_frame = ttk.Frame(run_config_frame)
+        proxy_frame.pack(fill=tk.X, pady=2)
+        tk.Checkbutton(proxy_frame, text="使用代理", variable=self.use_proxy,
+                       font=('WenQuanYi Micro Hei', 9), selectcolor='white').pack(side=tk.LEFT)
+        ttk.Label(proxy_frame, text="URL:").pack(side=tk.LEFT, padx=(8, 2))
+        ttk.Entry(proxy_frame, textvariable=self.proxy_url, width=28).pack(side=tk.LEFT, fill=tk.X, expand=True)
         
         # 中列：LLM审查设置
         llm_review_frame = ttk.LabelFrame(container_frame, text="LLM审查", padding="8")
@@ -626,6 +734,16 @@ class SimpleApp(tk.Tk):
         self._update_model_list()
         # 根据 provider 自动填充 base url
         provider = self.llm_provider.get().lower()
+        # 若存在按provider记忆的设置，优先恢复
+        try:
+            if provider in self.provider_settings:
+                ps = self.provider_settings[provider]
+                if ps.get('model'):
+                    self.llm_model.set(ps.get('model'))
+                if ps.get('base_url'):
+                    self.llm_base_url.set(ps.get('base_url'))
+        except Exception:
+            pass
         defaults = {
             "deepseek": "https://api.deepseek.com/v1",
             "openai": "https://api.openai.com/v1",
@@ -744,6 +862,17 @@ class SimpleApp(tk.Tk):
                     # 加载LLM启用状态
                     if hasattr(config, 'llm_enabled'):
                         self.llm_enabled.set(config.llm_enabled)
+                    # 加载代理与主题
+                    if hasattr(config, 'llm_use_proxy'):
+                        self.use_proxy.set(bool(config.llm_use_proxy))
+                    if hasattr(config, 'llm_proxy_url') and config.llm_proxy_url:
+                        self.proxy_url.set(config.llm_proxy_url)
+                    if hasattr(config, 'ui_theme') and config.ui_theme:
+                        self.ui_theme.set(config.ui_theme)
+                        try:
+                            ttk.Style().theme_use(config.ui_theme)
+                        except Exception:
+                            pass
                     # 若配置未提供 base_url，则按 provider 默认填充
                     if not self.llm_base_url.get():
                         try:
@@ -948,13 +1077,38 @@ class SimpleApp(tk.Tk):
                     model=gui_model,
                     temperature=getattr(cfg, 'llm_temperature', 0.2),
                     max_tokens=getattr(cfg, 'llm_max_tokens', 9999),
-                    use_proxy=getattr(cfg, 'llm_use_proxy', False),
-                    proxy_url=getattr(cfg, 'llm_proxy_url', None)
+                    use_proxy=self.use_proxy.get() if hasattr(self, 'use_proxy') else getattr(cfg, 'llm_use_proxy', False),
+                    proxy_url=self.proxy_url.get() or getattr(cfg, 'llm_proxy_url', None)
                 )
                 self._log(f"✅ LLM客户端创建成功: {gui_provider}/{gui_model}")
                 
                 # 设置报告优化选项
                 cfg.enable_report_optimization = self.enable_report_optimization.get()
+
+                # 保存用户设置（运行配置 + LLM配置）
+                try:
+                    self._save_user_settings()
+                    # 额外：按 provider 记忆 model/base_url
+                    try:
+                        cur = (self.llm_provider.get() or '').lower()
+                        if cur:
+                            self.provider_settings[cur] = {
+                                'model': self.llm_model.get(),
+                                'base_url': self.llm_base_url.get()
+                            }
+                            # 将 provider_settings 合并到用户设置文件中
+                            if os.path.exists(self.user_settings_path):
+                                with open(self.user_settings_path, "r", encoding="utf-8") as f:
+                                    s = json.load(f)
+                            else:
+                                s = {}
+                            s['provider_settings'] = self.provider_settings
+                            with open(self.user_settings_path, "w", encoding="utf-8") as f:
+                                json.dump(s, f, ensure_ascii=False, indent=2)
+                    except Exception as e:
+                        self._log(f"⚠️ 保存provider设置失败: {e}")
+                except Exception as e:
+                    self._log(f"⚠️ 保存用户设置出错: {e}")
 
                 
                 # 检查是否应该终止
