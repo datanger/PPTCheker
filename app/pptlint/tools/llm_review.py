@@ -83,6 +83,37 @@ class LLMReviewer:
         
         return cleaned_response.strip()
     
+    def _get_default_report_optimization_prompt(self, report_md: str, issues: List[Issue]) -> str:
+        """获取默认报告优化提示词"""
+        return f"""
+你是一个专业的报告优化专家。请对以下PPT审查报告进行优化，主要目标是：
+
+**优化要求：**
+1. **删除重复内容**：如果同一个问题在多个页面重复出现，只保留最重要的1-2个实例
+2. **精简无关紧要的提示**：删除过于琐碎或不重要的建议，只保留核心问题
+3. **合并相似问题**：将相同类型的问题合并为一条，避免重复
+4. **保持报告结构**：维持原有的Markdown格式和层次结构
+5. **突出重要问题**：确保严重问题（serious级别）得到突出显示
+
+**原始报告：**
+```markdown
+{report_md}
+```
+
+**问题统计：**
+- 总问题数：{len(issues)}
+- 规则问题：{len([i for i in issues if not i.rule_id.startswith('LLM_')])}
+- LLM问题：{len([i for i in issues if i.rule_id.startswith('LLM_')])}
+
+请返回优化后的报告，保持Markdown格式，确保：
+- 删除重复和冗余内容
+- 保留所有重要问题
+- 维持清晰的层次结构
+- 突出关键改进建议
+
+只返回优化后的Markdown报告，不要其他内容。
+"""
+    
     def _get_default_format_prompt(self, pages: List[Dict[str, Any]]) -> str:
         """获取默认格式审查提示词"""
         return f"""
@@ -710,6 +741,62 @@ PPT内容：
             traceback.print_exc()
             return []
     
+    def optimize_report(self, report_md: str) -> Optional[str]:
+        """使用LLM优化报告：去重、精简内容"""
+        if not report_md or not report_md.strip():
+            return None
+            
+        # 使用提示词管理器获取用户提示词
+        if self.prompt_manager:
+            user_prompt = self.prompt_manager.get_user_prompt_for_review('report_optimization')
+            # 构建完整提示词：用户提示 + 输入提示 + 输出提示
+            prompt = f"""{user_prompt}
+
+                **原始报告：**
+                ```markdown
+                {report_md}
+                ```
+
+                请返回优化后的报告，保持Markdown格式，确保：
+                - 删除重复和冗余内容
+                - 保留所有重要问题
+                - 维持清晰的层次结构
+                - 突出关键改进建议
+
+                只返回优化后的Markdown报告，不要其他内容。"""
+        else:
+            # 回退到默认提示词
+            prompt = self._get_default_report_optimization_prompt(report_md)
+        
+        try:
+            print(f"    📤 发送报告优化请求...")
+            print(f"    📝 原始报告长度: {len(report_md)} 字符")
+            
+            response = self.llm.complete(prompt, max_tokens=self.config.llm_max_tokens, stop_event=self.stop_event)
+            
+            if response and response.strip():
+                # 清理响应，移除可能的markdown代码块标记
+                optimized_report = response.strip()
+                if optimized_report.startswith('```markdown'):
+                    optimized_report = optimized_report[11:]
+                elif optimized_report.startswith('```'):
+                    optimized_report = optimized_report[3:]
+                if optimized_report.endswith('```'):
+                    optimized_report = optimized_report[:-3]
+                optimized_report = optimized_report.strip()
+                
+                print(f"    📥 收到优化报告，长度: {len(optimized_report)} 字符")
+                print(f"    📊 优化效果: 原始 {len(report_md)} → 优化后 {len(optimized_report)} 字符")
+                
+                return optimized_report
+            else:
+                print(f"    ⚠️ LLM未返回优化报告")
+                return None
+                
+        except Exception as e:
+            print(f"    ❌ 报告优化失败: {e}")
+            return None
+
     def run_llm_review(self, doc: DocumentModel) -> List[Issue]:
         """运行完整的LLM审查流程"""
         print("🤖 启动LLM智能审查...")

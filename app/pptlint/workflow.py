@@ -85,6 +85,23 @@ def run_review_workflow(parsing_result_path: str, cfg: ToolConfig, output_ppt: O
     print("📊 生成审查报告...")
     res.report_md = generate_report(all_issues, rule_issues, llm_issues)
     
+    # 步骤5.5：LLM优化报告（如果启用LLM且启用报告优化）
+    if llm and res.report_md and getattr(cfg, 'enable_report_optimization', True):
+        print("🤖 使用LLM优化报告...")
+        try:
+            from .tools.llm_review import create_llm_reviewer
+            reviewer = create_llm_reviewer(llm, cfg)
+            optimized_report = reviewer.optimize_report(res.report_md)
+            if optimized_report:
+                res.report_md = optimized_report
+                print("✅ 报告优化完成")
+            else:
+                print("⚠️ 报告优化失败，使用原始报告")
+        except Exception as e:
+            print(f"⚠️ 报告优化失败：{e}，使用原始报告")
+    elif not getattr(cfg, 'enable_report_optimization', True):
+        print("⏭️ 报告优化已禁用，使用原始报告")
+    
     # 步骤6：输出标记PPT（如果指定）
     if output_ppt:
         if not original_pptx_path:
