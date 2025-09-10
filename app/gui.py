@@ -370,8 +370,8 @@ class SimpleApp(tk.Tk):
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # 标题
-        title_label = ttk.Label(main_frame, text="PPT审查工具", font=self.title_font)
-        title_label.pack(pady=(0, 20))
+        # title_label = ttk.Label(main_frame, text="PPT审查工具", font=self.title_font)
+        # title_label.pack(pady=(0, 20))
         
         # 第一行：文件上传窗口和LLM配置窗口并排排列
         first_row_frame = ttk.Frame(main_frame)
