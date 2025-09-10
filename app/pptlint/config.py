@@ -36,6 +36,7 @@ class ToolConfig:
     llm_model: str = "deepseek-chat"
     llm_api_key: Optional[str] = None   # API密钥
     llm_endpoint: Optional[str] = None  # 自定义端点（留空则使用默认）
+    llm_base_url: Optional[str] = None  # 新增：自定义 Base URL（留空自动按 provider 推断）
     llm_temperature: float = 0.2
     llm_max_tokens: int = 9999
     llm_use_proxy: bool = False         # 是否使用代理（默认关闭）

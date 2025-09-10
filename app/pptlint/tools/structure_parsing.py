@@ -267,6 +267,7 @@ if __name__ == "__main__":
         provider=getattr(cfg, 'llm_provider', 'deepseek'),
         api_key=getattr(cfg, 'llm_api_key', None),
         endpoint=getattr(cfg, 'llm_endpoint', None),
+        base_url=getattr(cfg, 'llm_base_url', None),
         model=getattr(cfg, 'llm_model', 'deepseek-chat'),
         temperature=getattr(cfg, 'llm_temperature', 0.2),
         max_tokens=getattr(cfg, 'llm_max_tokens', 9999),

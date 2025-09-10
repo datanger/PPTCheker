@@ -47,10 +47,19 @@ with st.form("cfg_form"):
     st.markdown('<div class="section-title">LLM 设置</div>', unsafe_allow_html=True)
     col3, col4 = st.columns(2)
     with col3:
-        provider = st.text_input("Provider", value="deepseek")
+        provider = st.selectbox("Provider", options=["deepseek", "openai", "anthropic", "kimi", "bailian", "local"], index=0)
         model = st.text_input("Model", value="deepseek-chat")
     with col4:
-        endpoint = st.text_input("Endpoint(可空自动推断)", value="")
+        base_url_default = {
+            "deepseek": "https://api.deepseek.com/v1",
+            "openai": "https://api.openai.com/v1",
+            "anthropic": "https://api.anthropic.com/v1",
+            "kimi": "https://api.moonshot.cn/v1",
+            "bailian": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "local": "http://localhost:11434/v1",
+        }.get(provider, "")
+        base_url = st.text_input("Base URL(可空自动推断)", value=base_url_default)
+        endpoint = st.text_input("Endpoint(可留空，按 Base URL 自动拼接)", value="")
         api_key = st.text_input("API Key", value=os.getenv("LLM_API_KEY", ""), type="password")
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -83,6 +92,7 @@ if submitted:
             llm = LLMClient(
                 provider=provider,
                 endpoint=ep,
+                base_url=base_url or None,
                 api_key=ak,
                 model=model,
                 temperature=0.2,

@@ -11,36 +11,70 @@ from typing import Any, Dict, List, Optional
 import urllib.request
 
 
-def _resolve_endpoint(provider: str, model: Optional[str], explicit_endpoint: Optional[str]) -> Optional[str]:
-    """根据提供商和模型名推断默认 endpoint（OpenAI-compatible），显式值优先。"""
+def _resolve_base_url(provider: str, model: Optional[str], explicit_base_url: Optional[str]) -> Optional[str]:
+    """根据提供商与模型推断默认 base url（显式值优先）。"""
+    if explicit_base_url:
+        return explicit_base_url
+
+    provider_lower = (provider or "").lower()
+    model_lower = (model or "").lower()
+
+    # 常见提供商默认 base url（OpenAI-compatible 优先）
+    if provider_lower == "deepseek" or "deepseek" in model_lower:
+        return os.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1")
+    if provider_lower == "openai" or model_lower.startswith("gpt"):
+        return os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
+    if provider_lower == "anthropic" or "claude" in model_lower:
+        # Anthropic 并非严格 OpenAI 兼容，但此处仍返回其 messages 根路径
+        return os.getenv("LLM_BASE_URL", "https://api.anthropic.com/v1")
+    if provider_lower in ("kimi", "moonshot") or "moonshot" in model_lower:
+        # Kimi (Moonshot) 采用 OpenAI 兼容接口
+        return os.getenv("LLM_BASE_URL", "https://api.moonshot.cn/v1")
+    if provider_lower in ("bailian", "dashscope", "aliyun") or "qwen" in model_lower:
+        # 阿里云百炼 DashScope 兼容模式
+        return os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+    if provider_lower == "local":
+        # Ollama 默认
+        return os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    return os.getenv("LLM_BASE_URL")
+
+
+def _resolve_endpoint(provider: str, model: Optional[str], explicit_endpoint: Optional[str], base_url: Optional[str]) -> Optional[str]:
+    """推断最终 endpoint；若给出显式 endpoint 则使用之，否则由 base_url + 路径组合。"""
     if explicit_endpoint:
         return explicit_endpoint
-    
-    provider_lower = provider.lower()
+
+    base = base_url or _resolve_base_url(provider, model, None)
+    provider_lower = (provider or "").lower()
     model_lower = (model or "").lower()
-    
-    # 常见提供方的默认 OpenAI-compatible chat.completions 端点
-    if provider_lower == "deepseek" or "deepseek" in model_lower:
-        return os.getenv("LLM_ENDPOINT", "https://api.deepseek.com/v1/chat/completions")
-    elif provider_lower == "openai" or model_lower.startswith("gpt"):
-        return os.getenv("LLM_ENDPOINT", "https://api.openai.com/v1/chat/completions")
-    elif provider_lower == "anthropic" or "claude" in model_lower:
-        return os.getenv("LLM_ENDPOINT", "https://api.anthropic.com/v1/messages")
-    elif provider_lower == "local":
-        return os.getenv("LLM_ENDPOINT", "http://localhost:11434/v1/chat/completions")  # Ollama默认端点
-    else:
-        # 兜底用环境变量
-        return os.getenv("LLM_ENDPOINT")
+
+    if not base:
+        return None
+
+    # OpenAI 兼容路径
+    if provider_lower in ("deepseek", "openai", "kimi", "moonshot", "bailian", "dashscope", "aliyun", "local") or any(
+        k in model_lower for k in ("gpt", "deepseek", "qwen", "moonshot", "llama", "qwen2")
+    ):
+        return f"{base.rstrip('/')}/chat/completions"
+
+    # Anthropic messages
+    if provider_lower == "anthropic" or "claude" in model_lower:
+        return f"{base.rstrip('/')}/messages"
+
+    # 兜底：假定 OpenAI 兼容
+    return f"{base.rstrip('/')}/chat/completions"
 
 
 class LLMClient:
     def __init__(self, provider: str = "deepseek", endpoint: Optional[str] = None, 
                  api_key: Optional[str] = None, model: Optional[str] = None,
                  temperature: float = 0.2, max_tokens: int = 1024,
-                 use_proxy: bool = False, proxy_url: Optional[str] = None):
+                 use_proxy: bool = False, proxy_url: Optional[str] = None,
+                 base_url: Optional[str] = None):
         self.provider = provider
         self.model = model or "deepseek-chat"
-        self.endpoint = _resolve_endpoint(self.provider, self.model, endpoint)
+        self.base_url = _resolve_base_url(self.provider, self.model, base_url)
+        self.endpoint = _resolve_endpoint(self.provider, self.model, endpoint, self.base_url)
         self.temperature = temperature
         self.max_tokens = max_tokens
         

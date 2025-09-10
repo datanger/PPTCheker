@@ -21,10 +21,11 @@ term_mapping_path: "dicts/term_mapping.csv"  # 术语映射表
 
 # LLM配置
 llm_enabled: true             # 是否启用LLM审查
-llm_provider: "deepseek"      # LLM提供商：deepseek, openai, anthropic, local
+llm_provider: "deepseek"      # LLM提供商：deepseek, openai, anthropic, local, kimi, bailian
 llm_model: "deepseek-chat"    # 模型名称
 llm_api_key: "sk-0b582422a77448fbaacc018d714af908"  # API密钥（请替换为您的实际密钥）
-llm_endpoint: ""              # 自定义端点（留空则使用默认）
+llm_base_url: ""             # 基础URL（留空则按provider自动推断）
+llm_endpoint: ""              # 自定义端点（可留空，根据 base_url 自动拼接）
 llm_temperature: 0.2          # 温度参数（越低越确定）
 llm_max_tokens: 4000         # 最大token数
 llm_use_proxy: false          # 是否使用代理（默认关闭）
@@ -43,6 +44,13 @@ llm_models:
     - "claude-3-opus"
     - "claude-3-sonnet"
     - "claude-3-haiku"
+  kimi:
+    - "moonshot-v1-8k"
+    - "moonshot-v1-32k"
+    - "moonshot-v1-128k"
+  bailian:
+    - "qwen2.5-7b"
+    - "qwen2.5-14b"
   local:
     - "qwen2.5-7b"
     - "llama3.1-8b"

@@ -10,6 +10,7 @@ PPT审查工具 - 简化GUI启动器（用于exe版本）
 - 实时显示控制台输出
 """
 import os
+import json
 import sys
 import threading
 import tkinter as tk
@@ -178,6 +179,10 @@ class SimpleApp(tk.Tk):
         self.llm_provider = tk.StringVar(value="deepseek")
         self.llm_model = tk.StringVar(value="deepseek-chat")
         self.llm_api_key = tk.StringVar()
+        # 会话内按提供商记忆 API Key，并持久化到本地
+        self.provider_api_keys = {}
+        self.api_keys_path = os.path.join(os.path.expanduser("~"), ".pptlint_api_keys.json")
+        self.llm_base_url = tk.StringVar()
         self.mode = tk.StringVar(value="review")
         
         # 审查设置变量
@@ -404,7 +409,7 @@ class SimpleApp(tk.Tk):
         provider_frame.pack(fill=tk.X, pady=8)
         ttk.Label(provider_frame, text="提供商:", width=12).pack(side=tk.LEFT)
         provider_combo = ttk.Combobox(provider_frame, textvariable=self.llm_provider, 
-                                     values=["deepseek", "openai", "anthropic", "local"], 
+                                     values=["deepseek", "openai", "anthropic", "kimi", "bailian", "ollama", "local"], 
                                      state="readonly", width=20)
         provider_combo.pack(side=tk.LEFT, padx=(8, 0))
         provider_combo.bind('<<ComboboxSelected>>', self._on_provider_change)
@@ -414,9 +419,16 @@ class SimpleApp(tk.Tk):
         model_frame.pack(fill=tk.X, pady=8)
         ttk.Label(model_frame, text="模型:", width=12).pack(side=tk.LEFT)
         self.model_combo = ttk.Combobox(model_frame, textvariable=self.llm_model, 
-                                       state="readonly", width=20)
+                                       state="normal", width=20)
         self.model_combo.pack(side=tk.LEFT, padx=(8, 0))
         
+        # Base URL
+        base_url_frame = ttk.Frame(llm_frame)
+        base_url_frame.pack(fill=tk.X, pady=8)
+        ttk.Label(base_url_frame, text="API地址:", width=12).pack(side=tk.LEFT)
+        self.base_url_entry = ttk.Entry(base_url_frame, textvariable=self.llm_base_url)
+        self.base_url_entry.pack(side=tk.LEFT, padx=(8, 8), fill=tk.X, expand=True)
+
         # API密钥
         api_frame = ttk.Frame(llm_frame)
         api_frame.pack(fill=tk.X, pady=8)
@@ -425,8 +437,13 @@ class SimpleApp(tk.Tk):
         api_entry.pack(side=tk.LEFT, padx=(8, 8), fill=tk.X, expand=True)
         ttk.Button(api_frame, text="应用", command=self._apply_api_key, width=10).pack(side=tk.LEFT)
         
-        # 初始化模型列表
+        # 初始化模型列表与 API 地址
         self._update_model_list()
+        # 根据当前 provider 填充一次 API 地址
+        try:
+            self._on_provider_change()
+        except Exception:
+            pass
         
         # 第二行：审查配置窗口（10/10宽度，全宽）- 增加高度
         review_frame = ttk.LabelFrame(main_frame, text="⚙️ 审查配置窗口", padding="15")
@@ -592,6 +609,24 @@ class SimpleApp(tk.Tk):
     def _on_provider_change(self, event=None):
         """提供商变更处理"""
         self._update_model_list()
+        # 根据 provider 自动填充 base url
+        provider = self.llm_provider.get().lower()
+        defaults = {
+            "deepseek": "https://api.deepseek.com/v1",
+            "openai": "https://api.openai.com/v1",
+            "anthropic": "https://api.anthropic.com/v1",
+            "kimi": "https://api.moonshot.cn/v1",
+            "bailian": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "local": "http://localhost:11434/v1",
+            "ollama": "http://localhost:11434/v1",
+        }
+        if provider in defaults:
+            self.llm_base_url.set(defaults[provider])
+        # 尝试填充该 provider 记忆的 API Key；没有则清空
+        if provider in self.provider_api_keys and self.provider_api_keys[provider]:
+            self.llm_api_key.set(self.provider_api_keys[provider])
+        else:
+            self.llm_api_key.set("")
 
     def _update_model_list(self):
         """更新模型列表"""
@@ -600,12 +635,24 @@ class SimpleApp(tk.Tk):
             "deepseek": ["deepseek-chat", "deepseek-coder"],
             "openai": ["gpt-4", "gpt-3.5-turbo", "gpt-4-turbo"],
             "anthropic": ["claude-3-opus", "claude-3-sonnet", "claude-3-haiku"],
-            "local": ["qwen2.5-7b", "llama3.1-8b"]
+            "kimi": ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+            # 百炼（DashScope）常用可用模型（OpenAI兼容）
+            "bailian": [
+                "qwen2.5-7b-instruct",
+                "qwen2.5-14b-instruct",
+                "qwen2.5-32b-instruct",
+                "qwen-turbo",
+                "qwen-plus"
+            ],
+            "local": ["qwen2.5-7b", "llama3.1-8b"],
+            "ollama": ["qwen2.5-7b", "llama3.1-8b"]
         }
         
         if provider in models:
             self.model_combo['values'] = models[provider]
-            if self.model_combo.get() not in models[provider]:
+            current_model = (self.model_combo.get() or "").strip()
+            # 若当前为空，或当前模型不在该提供商列表内，则使用该提供商默认模型
+            if not current_model or current_model not in models[provider]:
                 self.model_combo.set(models[provider][0])
 
     def _apply_api_key(self):
@@ -621,15 +668,26 @@ class SimpleApp(tk.Tk):
         
         # 更新日志显示
         self._log(f"🔑 API密钥已更新: {new_api_key[:10]}...")
-        self._log("✅ 新密钥将在下次运行时生效")
+        self._log("✅ 新密钥下次运行时持续生效")
+        # 记忆到当前 provider
+        provider = (self.llm_provider.get() or '').lower()
+        if provider:
+            self.provider_api_keys[provider] = new_api_key
+            self._log(f"💾 已记忆 {provider} 提供商的 API Key")
         
         # 显示成功消息
-        messagebox.showinfo("成功", "API密钥已更新！\n新密钥将在下次运行时生效。")
+        messagebox.showinfo("成功", "API密钥已更新！\n新密钥下次运行时持续生效。")
+        # 持久化保存到本地
+        try:
+            with open(self.api_keys_path, "w", encoding="utf-8") as f:
+                json.dump(self.provider_api_keys, f, ensure_ascii=False, indent=2)
+            self._log("💾 API Key 已保存到本地")
+        except Exception as e:
+            self._log(f"⚠️ 保存 API Key 失败: {e}")
 
     def _load_default_config(self):
         """加载默认配置"""
-        # 设置默认API密钥
-        self.llm_api_key.set("sk-55286a5c1f2a470081004104ec41af71")
+        # 不设置全局默认 API 密钥，避免误填充到所有 Provider
         
         try:
             # 尝试加载配置文件，支持多种路径
@@ -649,12 +707,25 @@ class SimpleApp(tk.Tk):
                         self.llm_provider.set(config.llm_provider)
                     if hasattr(config, 'llm_model'):
                         self.llm_model.set(config.llm_model)
-                    # 如果配置文件中有API密钥，则使用配置文件中的
+                    # 如果配置文件中有API密钥，则仅作为当前 provider 的初始值
                     if hasattr(config, 'llm_api_key') and config.llm_api_key:
+                        cur = (self.llm_provider.get() or '').lower()
+                        self.provider_api_keys[cur] = config.llm_api_key
                         self.llm_api_key.set(config.llm_api_key)
+                    # 加载 base_url/endpoint（如有）
+                    if hasattr(config, 'llm_base_url') and config.llm_base_url:
+                        self.llm_base_url.set(config.llm_base_url)
+                    if hasattr(config, 'llm_endpoint') and config.llm_endpoint:
+                        self.llm_endpoint.set(config.llm_endpoint)
                     # 加载LLM启用状态
                     if hasattr(config, 'llm_enabled'):
                         self.llm_enabled.set(config.llm_enabled)
+                    # 若配置未提供 base_url，则按 provider 默认填充
+                    if not self.llm_base_url.get():
+                        try:
+                            self._on_provider_change()
+                        except Exception:
+                            pass
                     
                     # 加载审查设置
                     if hasattr(config, 'review_format'):
@@ -699,6 +770,21 @@ class SimpleApp(tk.Tk):
         except Exception as e:
             self._log(f"❌ 加载配置失败: {e}")
         
+        # 加载持久化的 API Key 映射
+        try:
+            if os.path.exists(self.api_keys_path):
+                with open(self.api_keys_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        self.provider_api_keys = data
+                        # 若当前 provider 有记忆的 key，填充
+                        cur = (self.llm_provider.get() or '').lower()
+                        if cur in self.provider_api_keys:
+                            self.llm_api_key.set(self.provider_api_keys[cur])
+                        self._log("🔐 已加载历史 API Key 映射")
+        except Exception as e:
+            self._log(f"⚠️ 加载历史 API Key 失败: {e}")
+
         # 启动时显示欢迎日志
         self._log("🚀 PPT审查工具已启动", 'success')
         self._log("📋 当前配置:", 'highlight')
@@ -823,18 +909,25 @@ class SimpleApp(tk.Tk):
                     json.dump(parsing_data, f, ensure_ascii=False, indent=2)
                 self._log(f"✅ PPT解析完成")
                 
-                # 创建LLM客户端
+                # 创建LLM客户端（GUI输入优先覆盖配置）
+                gui_provider = (self.llm_provider.get() or getattr(cfg, 'llm_provider', 'deepseek'))
+                gui_model = (self.llm_model.get() or getattr(cfg, 'llm_model', 'deepseek-chat'))
+                gui_api_key = (self.llm_api_key.get() or getattr(cfg, 'llm_api_key', None))
+                gui_base_url = (self.llm_base_url.get() or getattr(cfg, 'llm_base_url', None))
+                gui_endpoint = (getattr(cfg, 'llm_endpoint', None))  # GUI 不再提供 endpoint 输入
+
                 llm = LLMClient(
-                    provider=getattr(cfg, 'llm_provider', 'deepseek'),
-                    api_key=getattr(cfg, 'llm_api_key', None),
-                    endpoint=getattr(cfg, 'llm_endpoint', None),
-                    model=getattr(cfg, 'llm_model', 'deepseek-chat'),
+                    provider=gui_provider,
+                    api_key=gui_api_key,
+                    endpoint=gui_endpoint,
+                    base_url=gui_base_url,
+                    model=gui_model,
                     temperature=getattr(cfg, 'llm_temperature', 0.2),
                     max_tokens=getattr(cfg, 'llm_max_tokens', 9999),
                     use_proxy=getattr(cfg, 'llm_use_proxy', False),
                     proxy_url=getattr(cfg, 'llm_proxy_url', None)
                 )
-                self._log(f"✅ LLM客户端创建成功: {getattr(cfg, 'llm_provider', 'deepseek')}/{getattr(cfg, 'llm_model', 'deepseek-chat')}")
+                self._log(f"✅ LLM客户端创建成功: {gui_provider}/{gui_model}")
 
                 
                 # 检查是否应该终止

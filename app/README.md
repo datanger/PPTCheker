@@ -138,7 +138,7 @@ autofix_size: false          # 字号自动修复
 autofix_color: false         # 颜色自动修复
 ```
 
-### LLM配置
+### LLM配置（支持多Provider与Base URL）
 支持环境变量配置：
 ```bash
 # 推荐：使用 DeepSeek 专用环境变量
@@ -147,7 +147,8 @@ export DEEPSEEK_API_KEY="your_deepseek_api_key"
 # 或者：使用通用环境变量
 export LLM_API_KEY="your_api_key"
 export LLM_MODEL="deepseek-chat"
-export LLM_ENDPOINT="https://api.deepseek.com/v1/chat/completions"
+export LLM_BASE_URL="https://api.deepseek.com/v1"
+export LLM_ENDPOINT=""  # 留空将自动拼接 /chat/completions
 ```
 
 #### LLM智能审查配置
@@ -165,10 +166,17 @@ review_acronyms: true    # 缩略语审查
 review_fluency: true     # 表达流畅性审查
 ```
 
-#### 支持的LLM模型
-- **DeepSeek**: `deepseek-chat` (默认推荐)
-- **OpenAI**: `gpt-3.5-turbo`, `gpt-4`
-- **其他**: 支持OpenAI兼容的API端点
+#### 支持的LLM与默认 Base URL
+- **DeepSeek**: `https://api.deepseek.com/v1`
+- **OpenAI**: `https://api.openai.com/v1`
+- **Anthropic**: `https://api.anthropic.com/v1`（使用 `/messages` 路径）
+- **Kimi (Moonshot)**: `https://api.moonshot.cn/v1`
+- **百炼（DashScope）**: `https://dashscope.aliyuncs.com/compatible-mode/v1`
+- **Local (Ollama)**: `http://localhost:11434/v1`
+
+> 说明：当未显式指定 `llm_endpoint` 时，将根据 `llm_base_url` 与 provider 自动拼接：
+- OpenAI 兼容：`{base_url}/chat/completions`
+- Anthropic：`{base_url}/messages`
 
 ## 🔧 使用方式
 
@@ -196,8 +204,9 @@ python -m pptlint.cli --input "../input.pptx" --config "../configs/config.yaml" 
 export DEEPSEEK_API_KEY="your_deepseek_api_key"
 python -m app.pptlint.cli --input "input.pptx" --config "configs/config_llm.yaml" --llm on --output-ppt "out/智能审查版.pptx"
 
-# 或者使用通用环境变量
+# 或者使用通用环境变量（以 DeepSeek 为例）
 export LLM_API_KEY="your_api_key"
+export LLM_BASE_URL="https://api.deepseek.com/v1"
 python -m app.pptlint.cli --input "input.pptx" --config "configs/config_llm.yaml" --llm on --output-ppt "out/智能审查版.pptx"
 
 # 纯规则模式（LLM不可用时）
