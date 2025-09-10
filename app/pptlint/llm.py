@@ -7,6 +7,7 @@ LLM 模块（默认启用，可降级）。
 """
 import os
 import json
+import ssl
 from typing import Any, Dict, List, Optional
 import urllib.request
 
@@ -19,23 +20,38 @@ def _resolve_base_url(provider: str, model: Optional[str], explicit_base_url: Op
     provider_lower = (provider or "").lower()
     model_lower = (model or "").lower()
 
-    # 常见提供商默认 base url（OpenAI-compatible 优先）
-    if provider_lower == "deepseek" or "deepseek" in model_lower:
+    # 常见提供商默认 base url（Provider 优先）
+    if provider_lower == "local":
+        # 内网LLM服务默认地址
+        return os.getenv("LLM_BASE_URL", "https://192.168.10.173/sdw/chatbot/sysai/v1")
+    if provider_lower == "ollama":
+        # Ollama 本地服务
+        return os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    if provider_lower == "deepseek":
         return os.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1")
-    if provider_lower == "openai" or model_lower.startswith("gpt"):
+    if provider_lower == "openai":
         return os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
-    if provider_lower == "anthropic" or "claude" in model_lower:
+    if provider_lower == "anthropic":
         # Anthropic 并非严格 OpenAI 兼容，但此处仍返回其 messages 根路径
         return os.getenv("LLM_BASE_URL", "https://api.anthropic.com/v1")
-    if provider_lower in ("kimi", "moonshot") or "moonshot" in model_lower:
+    if provider_lower in ("kimi", "moonshot"):
         # Kimi (Moonshot) 采用 OpenAI 兼容接口
         return os.getenv("LLM_BASE_URL", "https://api.moonshot.cn/v1")
-    if provider_lower in ("bailian", "dashscope", "aliyun") or "qwen" in model_lower:
+    if provider_lower in ("bailian", "dashscope", "aliyun"):
         # 阿里云百炼 DashScope 兼容模式
         return os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-    if provider_lower == "local":
-        # Ollama 默认
-        return os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    
+    # 如果没有明确的 provider，则根据模型名称推断
+    if "deepseek" in model_lower:
+        return os.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1")
+    if model_lower.startswith("gpt"):
+        return os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
+    if "claude" in model_lower:
+        return os.getenv("LLM_BASE_URL", "https://api.anthropic.com/v1")
+    if "moonshot" in model_lower:
+        return os.getenv("LLM_BASE_URL", "https://api.moonshot.cn/v1")
+    if "qwen" in model_lower:
+        return os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
     return os.getenv("LLM_BASE_URL")
 
 
@@ -86,9 +102,16 @@ class LLMClient:
         if api_key:
             self.api_key = api_key
         else:
-            # 尝试从环境变量获取对应提供商的API key
-            env_key = f"{provider.upper()}_API_KEY"
-            self.api_key = os.getenv(env_key, "")
+            # 为local和ollama设置默认API key
+            provider_lower = provider.lower()
+            if provider_lower == "local":
+                self.api_key = "local-api-key"
+            elif provider_lower == "ollama":
+                self.api_key = "ollama-api-key"
+            else:
+                # 尝试从环境变量获取对应提供商的API key
+                env_key = f"{provider.upper()}_API_KEY"
+                self.api_key = os.getenv(env_key, "")
 
     def complete(self, prompt: str, max_tokens: Optional[int] = None, stop_event: Optional[object] = None) -> str:
         try:
@@ -135,10 +158,30 @@ class LLMClient:
                     opener = urllib.request.build_opener(proxy_handler)
                     urllib.request.install_opener(opener)
                 
-                with urllib.request.urlopen(req, data=data) as resp:
+                # 检查是否需要跳过SSL验证（内网地址）
+                context = None
+                if self.endpoint and ("192.168." in self.endpoint or "10." in self.endpoint or "172." in self.endpoint):
+                    context = ssl.create_default_context()
+                    context.check_hostname = False
+                    context.verify_mode = ssl.CERT_NONE
+                    print(f"🔓 跳过SSL验证: {self.endpoint}")
+                
+                with urllib.request.urlopen(req, data=data, context=context) as resp:
                     payload = json.loads(resp.read().decode("utf-8"))
-                    # OpenAI style
-                    return payload.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    
+                    # 检查是否有错误
+                    if "error" in payload and payload["error"]:
+                        print(f"LLM API错误: {payload['error'].get('message', '未知错误')}")
+                        return ""
+                    
+                    # OpenAI style - 安全解析
+                    choices = payload.get("choices", [])
+                    if choices and len(choices) > 0:
+                        message = choices[0].get("message", {})
+                        return message.get("content", "")
+                    
+                    print("LLM未返回有效内容")
+                    return ""
             except Exception as e:
                 print(f"LLM调用异常: {e}")
                 return ""

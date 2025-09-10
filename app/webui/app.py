@@ -56,7 +56,7 @@ with st.form("cfg_form"):
             "anthropic": "https://api.anthropic.com/v1",
             "kimi": "https://api.moonshot.cn/v1",
             "bailian": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            "local": "http://localhost:11434/v1",
+            "local": "https://192.168.10.173/sdw/chatbot/sysai/v1",
         }.get(provider, "")
         base_url = st.text_input("Base URL(可空自动推断)", value=base_url_default)
         endpoint = st.text_input("Endpoint(可留空，按 Base URL 自动拼接)", value="")

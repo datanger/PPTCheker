@@ -172,7 +172,7 @@ review_fluency: true     # 表达流畅性审查
 - **Anthropic**: `https://api.anthropic.com/v1`（使用 `/messages` 路径）
 - **Kimi (Moonshot)**: `https://api.moonshot.cn/v1`
 - **百炼（DashScope）**: `https://dashscope.aliyuncs.com/compatible-mode/v1`
-- **Local (Ollama)**: `http://localhost:11434/v1`
+- **Local (内网LLM)**: `https://192.168.10.173/sdw/chatbot/sysai/v1`
 
 > 说明：当未显式指定 `llm_endpoint` 时，将根据 `llm_base_url` 与 provider 自动拼接：
 - OpenAI 兼容：`{base_url}/chat/completions`

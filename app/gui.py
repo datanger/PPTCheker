@@ -632,16 +632,24 @@ class SimpleApp(tk.Tk):
             "anthropic": "https://api.anthropic.com/v1",
             "kimi": "https://api.moonshot.cn/v1",
             "bailian": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            "local": "http://localhost:11434/v1",
+            "local": "https://192.168.10.173/sdw/chatbot/sysai/v1",
             "ollama": "http://localhost:11434/v1",
         }
         if provider in defaults:
             self.llm_base_url.set(defaults[provider])
-        # 尝试填充该 provider 记忆的 API Key；没有则清空
+        # 尝试填充该 provider 记忆的 API Key；没有则使用默认值
         if provider in self.provider_api_keys and self.provider_api_keys[provider]:
             self.llm_api_key.set(self.provider_api_keys[provider])
         else:
-            self.llm_api_key.set("")
+            # 为local和ollama设置默认API key
+            default_keys = {
+                "local": "local-api-key",
+                "ollama": "ollama-api-key"
+            }
+            if provider in default_keys:
+                self.llm_api_key.set(default_keys[provider])
+            else:
+                self.llm_api_key.set("")
 
     def _update_model_list(self):
         """更新模型列表"""
@@ -659,7 +667,7 @@ class SimpleApp(tk.Tk):
                 "qwen-turbo",
                 "qwen-plus"
             ],
-            "local": ["qwen2.5-7b", "llama3.1-8b"],
+            "local": ["gpt-4o", "deepseek-chat", "deepseek-coder"],
             "ollama": ["qwen2.5-7b", "llama3.1-8b"]
         }
         
@@ -677,8 +685,9 @@ class SimpleApp(tk.Tk):
             messagebox.showerror("错误", "API密钥不能为空")
             return
         
-        # 验证API密钥格式
-        if not new_api_key.startswith(('sk-', 'Bearer ')):
+        # 验证API密钥格式（排除local和ollama的默认密钥）
+        provider = (self.llm_provider.get() or '').lower()
+        if provider not in ['local', 'ollama'] and not new_api_key.startswith(('sk-', 'Bearer ')):
             messagebox.showwarning("警告", "API密钥格式可能不正确，通常以'sk-'或'Bearer '开头")
         
         # 更新日志显示

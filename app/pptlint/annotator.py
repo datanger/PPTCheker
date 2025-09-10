@@ -231,10 +231,9 @@ def annotate_pptx(src_path: str, issues: List[Issue], output_path: str, llm_clie
                                 else:
                                     print(f"    ✅ 形状 {sid} 的缩略语已被充分解释，跳过标记")
                             else:
-                                print(f"    ❌ 形状 {sid} 不包含缩略语，跳过标记")
+                                pass
                     else:
                         # 对于其他LLM规则，暂时跳过
-                        print(f"    ⚠️ 跳过非缩略语LLM规则: {issue.rule_id}")
                         pass
                 # 匹配方式3：title_X格式匹配（页面标题）
                 elif issue.object_ref.startswith("title_") and issue.object_ref.endswith(f"_{s_idx}"):
@@ -295,9 +294,7 @@ def annotate_pptx(src_path: str, issues: List[Issue], output_path: str, llm_clie
                 # 匹配方式6：全局缩略语问题（当LLM报告页面级别问题时，检查所有页面）
                 elif (issue.rule_id in ["LLM_AcronymRule", "ADAS_AcronymRule", "GraphRAG_AcronymRule"] or 
                       issue.rule_id.endswith("_AcronymRule")) and issue.object_ref.startswith("page_"):
-                    # 对于LLM报告的页面级别缩略语问题，检查当前形状是否包含相关缩略语
-                    print(f"    🔍 检查全局缩略语匹配: {issue.object_ref} -> 当前页面 {s_idx}")
-                    
+                    # 对于LLM报告的页面级别缩略语问题，检查当前形状是否包含相关缩略语                    
                     # 获取形状的文本内容
                     text_content = ""
                     try:

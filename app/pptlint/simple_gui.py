@@ -327,8 +327,9 @@ class SimpleApp(tk.Tk):
             messagebox.showerror("错误", "API密钥不能为空")
             return
         
-        # 验证API密钥格式
-        if not new_api_key.startswith(('sk-', 'Bearer ')):
+        # 验证API密钥格式（排除local和ollama的默认密钥）
+        provider = (self.llm_provider.get() or '').lower()
+        if provider not in ['local', 'ollama'] and not new_api_key.startswith(('sk-', 'Bearer ')):
             messagebox.showwarning("警告", "API密钥格式可能不正确，通常以'sk-'或'Bearer '开头")
         
         # 更新日志显示
