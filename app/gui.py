@@ -185,6 +185,9 @@ class SimpleApp(tk.Tk):
         self.llm_base_url = tk.StringVar()
         self.mode = tk.StringVar(value="review")
         
+        # 运行配置变量
+        self.enable_report_optimization = tk.BooleanVar(value=True)
+        
         # 审查设置变量
         self.review_logic = tk.BooleanVar(value=True)
         self.review_acronyms = tk.BooleanVar(value=True)
@@ -392,13 +395,7 @@ class SimpleApp(tk.Tk):
         ttk.Entry(output_frame, textvariable=self.output_dir).pack(side=tk.LEFT, padx=(8, 8), fill=tk.X, expand=True)
         ttk.Button(output_frame, text="选择", command=self._select_output_dir, width=10).pack(side=tk.LEFT)
         
-        # 运行模式
-        mode_frame = ttk.Frame(file_frame)
-        mode_frame.pack(fill=tk.X, pady=8)
-        ttk.Label(mode_frame, text="运行模式:", width=12).pack(side=tk.LEFT)
-        mode_combo = ttk.Combobox(mode_frame, textvariable=self.mode, values=["review", "edit"], 
-                                 state="readonly", width=20)
-        mode_combo.pack(side=tk.LEFT, padx=(8, 0))
+        # 运行模式已移至运行配置窗口
         
         # LLM配置窗口（5/10宽度）
         llm_frame = ttk.LabelFrame(first_row_frame, text="🤖 LLM配置窗口", padding="15")
@@ -460,6 +457,10 @@ class SimpleApp(tk.Tk):
         button_frame = ttk.Frame(run_frame)
         button_frame.pack(pady=2)
         
+        # 管理提示词按钮 - 最左侧
+        ttk.Button(button_frame, text="📝 管理提示词", command=self._open_prompt_manager, 
+                   width=15).pack(side=tk.LEFT, padx=(0, 5))
+        
         # 开始审查按钮 - 美化版本
         self.run_button = ttk.Button(button_frame, text="🚀 开始审查", command=self._run_review, 
                                     width=15)
@@ -520,11 +521,28 @@ class SimpleApp(tk.Tk):
         
         # 配置grid列权重 - 确保等宽
         container_frame.grid_columnconfigure(0, weight=1)  # 左列权重1
-        container_frame.grid_columnconfigure(1, weight=1)  # 右列权重1
+        container_frame.grid_columnconfigure(1, weight=1)  # 中列权重1
+        container_frame.grid_columnconfigure(2, weight=1)  # 右列权重1
         
-        # 左列：LLM审查设置
+        # 左列：运行配置
+        run_config_frame = ttk.LabelFrame(container_frame, text="运行配置", padding="8")
+        run_config_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        
+        # 运行模式
+        mode_frame = ttk.Frame(run_config_frame)
+        mode_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(mode_frame, text="运行模式:", width=12).pack(side=tk.LEFT)
+        mode_combo = ttk.Combobox(mode_frame, textvariable=self.mode, values=["review", "edit"], 
+                                 state="readonly", width=20)
+        mode_combo.pack(side=tk.LEFT, padx=(8, 0))
+        
+        # 报告优化选项
+        tk.Checkbutton(run_config_frame, text="启用报告优化", variable=self.enable_report_optimization, 
+                       font=('WenQuanYi Micro Hei', 9), selectcolor='white').pack(anchor=tk.W, padx=3, pady=2)
+        
+        # 中列：LLM审查设置
         llm_review_frame = ttk.LabelFrame(container_frame, text="LLM审查", padding="8")
-        llm_review_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        llm_review_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 5))
         
         tk.Checkbutton(llm_review_frame, text="内容逻辑审查", variable=self.review_logic, 
                        font=('WenQuanYi Micro Hei', 9), selectcolor='white').pack(anchor=tk.W, padx=3, pady=2)
@@ -535,13 +553,10 @@ class SimpleApp(tk.Tk):
         tk.Checkbutton(llm_review_frame, text="主题一致性检查", variable=self.theme_harmony, 
                        font=('WenQuanYi Micro Hei', 9), selectcolor='white').pack(anchor=tk.W, padx=3, pady=2)
         
-        # 提示词管理按钮
-        ttk.Button(llm_review_frame, text="📝 管理提示词", command=self._open_prompt_manager, 
-                   width=15).pack(anchor=tk.W, padx=3, pady=(10, 2))
         
         # 右列：审查规则设置
         rules_frame = ttk.LabelFrame(container_frame, text="规则审查", padding="8")
-        rules_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+        rules_frame.grid(row=0, column=2, sticky="nsew", padx=(5, 0))
         
         # 字体族检查 - 使用Frame包装实现整齐排列
         font_frame = ttk.Frame(rules_frame)
@@ -928,6 +943,9 @@ class SimpleApp(tk.Tk):
                     proxy_url=getattr(cfg, 'llm_proxy_url', None)
                 )
                 self._log(f"✅ LLM客户端创建成功: {gui_provider}/{gui_model}")
+                
+                # 设置报告优化选项
+                cfg.enable_report_optimization = self.enable_report_optimization.get()
 
                 
                 # 检查是否应该终止
