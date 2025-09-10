@@ -175,6 +175,21 @@ def generate_report(issues: List[Issue], rule_issues: List[Issue] = None, llm_is
 
 def _generate_categorized_report(issues: List[Issue], rule_issues: List[Issue], llm_issues: List[Issue]) -> str:
     """生成分类报告"""
+    # 规则ID到中文名称映射（与 annotator/reporter 保持一致）
+    rule_labels = {
+        # 规则检查
+        "FontFamilyRule": "字体不规范",
+        "FontSizeRule": "字号过小",
+        "ColorCountRule": "颜色过多",
+        "ThemeHarmonyRule": "色调不一致",
+        # LLM智能审查
+        "LLM_AcronymRule": "专业缩略语需解释",
+        "LLM_ContentRule": "内容逻辑问题",
+        "LLM_FormatRule": "智能格式问题",
+        "LLM_FluencyRule": "表达流畅性问题",
+        "LLM_TitleStructureRule": "标题结构问题",
+        "LLM_ThemeHarmonyRule": "主题一致性问题",
+    }
     # 创建规则检查和LLM审查的问题集合
     rule_issue_ids = {id(issue) for issue in rule_issues}
     llm_issue_ids = {id(issue) for issue in llm_issues}
@@ -232,7 +247,7 @@ def _generate_categorized_report(issues: List[Issue], rule_issues: List[Issue], 
                 if rule_issues_on_page:
                     report += "**🔍 规则检查问题:**\n\n"
                     for issue in rule_issues_on_page:
-                        report += f"- **{issue.rule_id}** | 严重性: {issue.severity} | 对象: {issue.object_ref}\n"
+                        report += f"- **{rule_labels.get(issue.rule_id, issue.rule_id)}** | 严重性: {issue.severity} | 对象: {issue.object_ref}\n"
                         report += f"  - 描述: {issue.message}\n"
                         if issue.suggestion:
                             report += f"  - 建议: {issue.suggestion}\n"
@@ -242,7 +257,7 @@ def _generate_categorized_report(issues: List[Issue], rule_issues: List[Issue], 
                 if llm_issues_on_page:
                     report += "**🤖 LLM智能审查问题:**\n\n"
                     for issue in llm_issues_on_page:
-                        report += f"- **{issue.rule_id}** | 严重性: {issue.severity} | 对象: {issue.object_ref}\n"
+                        report += f"- **{rule_labels.get(issue.rule_id, issue.rule_id)}** | 严重性: {issue.severity} | 对象: {issue.object_ref}\n"
                         report += f"  - 描述: {issue.message}\n"
                         if issue.suggestion:
                             report += f"  - 建议: {issue.suggestion}\n"
@@ -268,7 +283,7 @@ def _generate_categorized_report(issues: List[Issue], rule_issues: List[Issue], 
         
         report += "**规则检查分类:**\n\n"
         for rule_id, count in rule_counts.items():
-            report += f"- {rule_id}: {count} 个\n"
+            report += f"- {rule_labels.get(rule_id, rule_id)}: {count} 个\n"
     else:
         report += "**规则检查分类:**\n\n无\n"
     
@@ -280,7 +295,7 @@ def _generate_categorized_report(issues: List[Issue], rule_issues: List[Issue], 
         
         report += "\n**LLM审查分类:**\n\n"
         for rule_id, count in llm_counts.items():
-            report += f"- {rule_id}: {count} 个\n"
+            report += f"- {rule_labels.get(rule_id, rule_id)}: {count} 个\n"
     else:
         report += "\n**LLM审查分类:**\n\n无\n"
     

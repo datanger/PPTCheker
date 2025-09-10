@@ -35,7 +35,7 @@ MD_TEMPLATE = Template(
 **🔍 规则检查问题:**
 {% if page_rule_issues %}
 {% for it in page_rule_issues %}
-- **{{ it.rule_id }}** | 严重性: {{ it.severity }} | 对象: {{ it.object_ref }}
+- **{{ rule_labels.get(it.rule_id, it.rule_id) }}** | 严重性: {{ it.severity }} | 对象: {{ it.object_ref }}
   - 描述: {{ it.message }}
   - 建议: {{ it.suggestion or '-' }}
   - 可自动修复: {{ '是' if it.can_autofix else '否' }} | 已修复: {{ '是' if it.fixed else '否' }}
@@ -47,7 +47,7 @@ MD_TEMPLATE = Template(
 **🤖 LLM智能审查问题:**
 {% if page_llm_issues %}
 {% for it in page_llm_issues %}
-- **{{ it.rule_id }}** | 严重性: {{ it.severity }} | 对象: {{ it.object_ref }}
+- **{{ rule_labels.get(it.rule_id, it.rule_id) }}** | 严重性: {{ it.severity }} | 对象: {{ it.object_ref }}
   - 描述: {{ it.message }}
   - 建议: {{ it.suggestion or '-' }}
   - 可自动修复: {{ '是' if it.can_autofix else '否' }} | 已修复: {{ '是' if it.fixed else '否' }}
@@ -70,12 +70,12 @@ MD_TEMPLATE = Template(
 ### 📋 问题分类统计
 **规则检查分类:**
 {% for rule_id in rule_issues|map(attribute='rule_id')|unique|list %}
-- {{ rule_id }}: {{ rule_issues|selectattr('rule_id', 'equalto', rule_id)|list|length }} 个
+- {{ rule_labels.get(rule_id, rule_id) }}: {{ rule_issues|selectattr('rule_id', 'equalto', rule_id)|list|length }} 个
 {% endfor %}
 
 **LLM审查分类:**
 {% for rule_id in llm_issues|map(attribute='rule_id')|unique|list %}
-- {{ rule_id }}: {{ llm_issues|selectattr('rule_id', 'equalto', rule_id)|list|length }} 个
+- {{ rule_labels.get(rule_id, rule_id) }}: {{ llm_issues|selectattr('rule_id', 'equalto', rule_id)|list|length }} 个
 {% endfor %}
 """
 )
@@ -89,11 +89,27 @@ def render_markdown(issues: List[Issue]) -> str:
     # 区分规则检查和LLM审查的问题
     rule_issues = [it for it in deduplicated_issues if not it.rule_id.startswith("LLM_")]
     llm_issues = [it for it in deduplicated_issues if it.rule_id.startswith("LLM_")]
-    
+    # 规则ID到中文名称映射（与 annotator 中一致）
+    rule_labels = {
+        # 规则检查
+        "FontFamilyRule": "字体不规范",
+        "FontSizeRule": "字号过小",
+        "ColorCountRule": "颜色过多",
+        "ThemeHarmonyRule": "色调不一致",
+        # LLM智能审查
+        "LLM_AcronymRule": "专业缩略语需解释",
+        "LLM_ContentRule": "内容逻辑问题",
+        "LLM_FormatRule": "智能格式问题",
+        "LLM_FluencyRule": "表达流畅性问题",
+        "LLM_TitleStructureRule": "标题结构问题",
+        "LLM_ThemeHarmonyRule": "主题一致性问题",
+    }
+
     return MD_TEMPLATE.render(
         issues=deduplicated_issues,
         rule_issues=rule_issues,
-        llm_issues=llm_issues
+        llm_issues=llm_issues,
+        rule_labels=rule_labels
     )
 
 

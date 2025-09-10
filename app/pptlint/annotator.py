@@ -328,12 +328,7 @@ def annotate_pptx(src_path: str, issues: List[Issue], output_path: str, llm_clie
                             if not _is_acronym_adequately_explained(text_content, target_acronym, llm_client):
                                 hit_rules.append(issue.rule_id)
                                 print(f"    ✅ 全局缩略语匹配: 形状 {sid} 包含需要解释的缩略语 {target_acronym}，标记为 {issue.rule_id}")
-                            else:
-                                print(f"    ✅ 形状 {sid} 的缩略语 {target_acronym} 已被充分解释，跳过标记")
-                        else:
-                            print(f"    ❌ 形状 {sid} 不包含目标缩略语 {target_acronym}，跳过全局缩略语标记")
-                    else:
-                        print(f"    ❌ 形状 {sid} 不包含缩略语，跳过全局缩略语标记")
+     
             
             if not hit_rules:
                 continue
@@ -347,8 +342,6 @@ def annotate_pptx(src_path: str, issues: List[Issue], output_path: str, llm_clie
                 "ThemeHarmonyRule": "色调不一致",
                 # LLM智能审查问题
                 "LLM_AcronymRule": "专业缩略语需解释",
-                "ADAS_AcronymRule": "专业缩略语需解释",
-                "GraphRAG_AcronymRule": "专业缩略语需解释",
                 "LLM_ContentRule": "内容逻辑问题",
                 "LLM_FormatRule": "智能格式问题",
                 "LLM_FluencyRule": "表达流畅性问题",

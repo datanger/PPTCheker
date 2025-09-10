@@ -30,11 +30,19 @@ def _is_color_equal(c1: Color, c2: Color, tol: int = 10) -> bool:
 def check_font_and_size(doc: DocumentModel, cfg: ToolConfig) -> List[Issue]:
     """检查字体和字号（明确的格式规范）"""
     issues: List[Issue] = []
+    
+    # 检查是否启用了字体和字号检查
+    font_family_enabled = getattr(cfg, 'rules', {}).get('font_family', True)
+    font_size_enabled = getattr(cfg, 'rules', {}).get('font_size', True)
+    
+    if not font_family_enabled and not font_size_enabled:
+        return issues
+    
     for slide in doc.slides:
         for shp in slide.shapes:
             for tr in shp.text_runs:
                 # 字号检查
-                if tr.font_size_pt is not None and tr.font_size_pt < cfg.min_font_size_pt:
+                if font_size_enabled and tr.font_size_pt is not None and tr.font_size_pt < cfg.min_font_size_pt:
                     issues.append(Issue(
                         file=doc.file_path,
                         slide_index=slide.index,
@@ -46,7 +54,7 @@ def check_font_and_size(doc: DocumentModel, cfg: ToolConfig) -> List[Issue]:
                         can_autofix=cfg.autofix_size,
                     ))
                 # 日文字体检查 - 过滤掉"未知"字体，只检查识别到的字体
-                if tr.language_tag == "ja":
+                if font_family_enabled and tr.language_tag == "ja":
                     font_name_norm = (tr.font_name or "").strip()
                     # 只对识别到的字体进行检查，跳过"未知"字体
                     if font_name_norm and font_name_norm != "未知" and font_name_norm != cfg.jp_font_name:
@@ -66,6 +74,13 @@ def check_font_and_size(doc: DocumentModel, cfg: ToolConfig) -> List[Issue]:
 def check_color_count(doc: DocumentModel, cfg: ToolConfig) -> List[Issue]:
     """检查颜色数量（明确的格式规范）"""
     issues: List[Issue] = []
+    
+    # 检查是否启用了颜色数量检查
+    color_count_enabled = getattr(cfg, 'rules', {}).get('color_count', True)
+    
+    if not color_count_enabled:
+        return issues
+    
     for slide in doc.slides:
         color_set = set()
         def add(c: Color):
@@ -91,6 +106,12 @@ def check_color_count(doc: DocumentModel, cfg: ToolConfig) -> List[Issue]:
 
 def check_theme_harmony(doc: DocumentModel, cfg: ToolConfig) -> List[Issue]:
     """检查主题色调一致性（预留接口，待完善）"""
+    # 检查是否启用了主题一致性检查
+    theme_harmony_enabled = getattr(cfg, 'rules', {}).get('theme_harmony', True)
+    
+    if not theme_harmony_enabled:
+        return []
+    
     # 简化：由于主题色提取依赖更深入的母版解析，这里先留空返回[]，后续演进
     return []
 

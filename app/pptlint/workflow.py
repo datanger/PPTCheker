@@ -6,6 +6,7 @@
 输出：审查结果、报告、标记PPT等
 """
 from typing import List, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .config import ToolConfig
 from .model import Issue
@@ -124,7 +125,7 @@ def run_review_workflow(parsing_result_path: str, cfg: ToolConfig, output_ppt: O
 
 
 def _perform_llm_review(parsing_data, cfg: ToolConfig, llm: Optional[LLMClient], stop_event: Optional[object] = None) -> List[Issue]:
-    """公共：基于 parsing_result.json 调用LLM进行多维度审查并返回问题列表。"""
+    """公共：基于 parsing_result.json 调用LLM进行多维度审查并返回问题列表（并行处理）。"""
     issues: List[Issue] = []
     
     try:
@@ -134,8 +135,6 @@ def _perform_llm_review(parsing_data, cfg: ToolConfig, llm: Optional[LLMClient],
         if stop_event:
             reviewer.set_stop_event(stop_event)
         
-        issues = []
-        
         # 格式规范审查已移至规则审查，这里不再执行
         print("⏭️ 跳过格式标准审查（已移至规则审查）")
         
@@ -144,39 +143,58 @@ def _perform_llm_review(parsing_data, cfg: ToolConfig, llm: Optional[LLMClient],
             print("⏹️ 用户请求终止，停止LLM审查")
             return issues
         
-        if cfg.review_logic:
-            print("🤖 开始内容逻辑审查...")
-            logic = reviewer.review_content_logic(parsing_data)
-            if logic:
-                issues.extend(logic)
-        else:
-            print("🤖 内容逻辑审查已禁用，跳过...")
+        # 定义需要并行执行的审查任务
+        review_tasks = []
         
-        # 检查是否应该停止
-        if stop_event and stop_event.is_set():
-            print("⏹️ 用户请求终止，停止LLM审查")
-            return issues
+        if cfg.review_logic:
+            review_tasks.append(("内容逻辑审查", reviewer.review_content_logic, parsing_data))
         
         if cfg.review_acronyms:
-            print("🤖 开始缩略语审查...")
-            acr = reviewer.review_acronyms(parsing_data)
-            if acr:
-                issues.extend(acr)
-        else:
-            print("🤖 缩略语审查已禁用，跳过...")
-        
-        # 检查是否应该停止
-        if stop_event and stop_event.is_set():
-            print("⏹️ 用户请求终止，停止LLM审查")
-            return issues
+            review_tasks.append(("缩略语审查", reviewer.review_acronyms, parsing_data))
         
         if cfg.review_fluency:
-            print("🤖 开始标题结构审查...")
-            title = reviewer.review_title_structure(parsing_data)
-            if title:
-                issues.extend(title)
-        else:
-            print("🤖 标题结构审查已禁用，跳过...")
+            review_tasks.append(("表达流畅性审查", reviewer.review_fluency, parsing_data))
+        
+        # 检查主题一致性审查（从rules配置中获取）
+        if getattr(cfg, 'rules', {}).get('theme_harmony', False):
+            review_tasks.append(("主题一致性审查", reviewer.review_theme_harmony, parsing_data))
+        
+        if not review_tasks:
+            print("🤖 所有LLM审查已禁用，跳过...")
+            return issues
+        
+        print(f"🚀 开始并行执行 {len(review_tasks)} 个LLM审查任务...")
+        
+        # 使用线程池并行执行审查任务
+        with ThreadPoolExecutor(max_workers=min(len(review_tasks), 3)) as executor:
+            # 提交所有任务
+            future_to_task = {}
+            for task_name, task_func, task_data in review_tasks:
+                if stop_event and stop_event.is_set():
+                    print("⏹️ 用户请求终止，取消剩余任务")
+                    break
+                
+                future = executor.submit(task_func, task_data)
+                future_to_task[future] = task_name
+            
+            # 收集结果
+            for future in as_completed(future_to_task):
+                if stop_event and stop_event.is_set():
+                    print("⏹️ 用户请求终止，停止收集结果")
+                    break
+                
+                task_name = future_to_task[future]
+                try:
+                    result = future.result()
+                    if result:
+                        issues.extend(result)
+                        print(f"✅ {task_name}完成，发现 {len(result)} 个问题")
+                    else:
+                        print(f"✅ {task_name}完成，未发现问题")
+                except Exception as e:
+                    print(f"❌ {task_name}失败：{e}")
+        
+        print(f"🎉 并行LLM审查完成，总共发现 {len(issues)} 个问题")
         
     except Exception as e:
         print(f"⚠️ LLM审查失败：{e}")

@@ -170,8 +170,22 @@ def main():
             for issue in res.issues:
                 rule_counts[issue.rule_id] = rule_counts.get(issue.rule_id, 0) + 1
             
+            # 中文映射
+            rule_labels = {
+                "FontFamilyRule": "字体不规范",
+                "FontSizeRule": "字号过小",
+                "ColorCountRule": "颜色过多",
+                "ThemeHarmonyRule": "色调不一致",
+                "LLM_AcronymRule": "专业缩略语需解释",
+                "LLM_ContentRule": "内容逻辑问题",
+                "LLM_FormatRule": "智能格式问题",
+                "LLM_FluencyRule": "表达流畅性问题",
+                "LLM_TitleStructureRule": "标题结构问题",
+                "LLM_ThemeHarmonyRule": "主题一致性问题",
+            }
             for rule_id, count in rule_counts.items():
-                print(f"  {rule_id}: {count} 个问题")
+                label = rule_labels.get(rule_id, rule_id)
+                print(f"  {label}: {count} 个问题")
         
         print(f"\n[green]✓[/green] 所有文件已保存到: {args.output_dir}")
         
